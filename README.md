@@ -1,4 +1,4 @@
-# ViLUn Artifact
+# ViLUn (Villain-Guided Learning for Unlearning)
 
 This repository contains the experimental artifact for **ViLUn: Villain-Guided Learning for Forget-Free Unlearning**. ViLUn studies requester-owner machine unlearning where the requester keeps the forget data local, trains a compact headless villain backbone, and the model owner performs feature-space orthogonal repulsion without receiving raw forget samples.
 
@@ -85,7 +85,7 @@ Common variables:
 | `UNLEARN_EPOCHS` | `50` | ViLUn owner-side update epochs |
 | `DEFAULT_ALPHA` | `1` | Retain KL weight |
 | `DEFAULT_BETA` | `2` | Feature repulsion weight |
-| `DEFAULT_HELDOUT_RATIO` | `0.1` | Held-out auxiliary ratio |
+| `DEFAULT_HELDOUT_RATIO` | `0.05` | Held-out auxiliary ratio |
 | `DEFAULT_RETAIN_RATIO` | `0.05` | Retain subset ratio |
 | `LLM_ORIG_MODEL` | `Qwen/Qwen2.5-3B` | LLM classifier backbone for the extension |
 
