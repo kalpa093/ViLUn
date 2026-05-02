@@ -37,7 +37,6 @@ torch==2.7.0
 torchvision==0.22.0
 numpy==1.26.4
 Pillow==8.4.0
-optuna==4.7.0
 transformers==4.49.0
 accelerate==1.9.0
 ```
@@ -212,32 +211,6 @@ To change the LLM backbone:
 LLM_ORIG_MODEL="Qwen/Qwen2.5-7B" ./scripts/run_07_llm_mia.sh
 ```
 
-## Useful Single Commands
-
-Run a small smoke test on CIFAR-10 only:
-
-```bash
-DATASETS="cifar10" GPUS="0" TRAIN_EPOCHS=1 UNLEARN_EPOCHS=1 ./scripts/run_02_main_sample.sh
-```
-
-Run only main ViLUn and skip expensive baselines:
-
-```bash
-./scripts/run_00_prepare.sh
-./scripts/run_02_main_sample.sh
-```
-
-Run image experiments without the final LLM stage:
-
-```bash
-./scripts/run_00_prepare.sh
-./scripts/run_01_baselines.sh
-./scripts/run_02_main_sample.sh
-./scripts/run_03_config_sensitivity.sh
-./scripts/run_04_architecture.sh
-./scripts/run_05_privacy_mia.sh
-./scripts/run_06_ablation_scope.sh
-```
 
 ## Output Files
 
