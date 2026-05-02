@@ -4,7 +4,22 @@ This repository contains the experimental artifact for **ViLUn: Villain-Guided L
 
 ## Environment
 
-The artifact was written for Linux with CUDA GPUs and Python 3.10+. A minimal setup is:
+We tested the artifact under the following environment:
+
+| Component | Version |
+| --- | --- |
+| OS | Ubuntu 22.04.5 LTS (jammy) |
+| Kernel | Linux 6.8.0-107-generic |
+| Python | 3.9.7 |
+| pip | 21.2.4 |
+| GPU | 3 x NVIDIA GeForce RTX 4090, 24 GB each |
+| NVIDIA Driver | 535.230.02 |
+| System CUDA | 12.2 |
+| PyTorch | 2.7.0 |
+| PyTorch CUDA | 12.6 |
+| cuDNN | 90501 |
+
+A minimal setup is:
 
 ```bash
 python3 -m venv .venv
@@ -13,17 +28,18 @@ pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-For GPU runs, install the PyTorch build that matches your CUDA version from the official PyTorch instructions before installing the remaining packages.
+For GPU runs, install the PyTorch build that matches your CUDA/driver setup from the official PyTorch instructions before installing the remaining packages. On the tested server, `nvidia-smi` reported CUDA 12.2, while PyTorch was built with CUDA 12.6 and `torch.cuda.is_available()` returned `True`.
 
-Main Python dependencies:
+The artifact intentionally keeps `requirements.txt` minimal. The code directly uses PyTorch/TorchVision, NumPy, Pillow, Optuna, and HuggingFace Transformers. `accelerate` is included because the LLM extension loads HuggingFace models with `device_map`.
 
 ```text
-torch
-torchvision
-numpy
-pillow
-optuna
-transformers
+torch==2.7.0
+torchvision==0.22.0
+numpy==1.26.4
+Pillow==8.4.0
+optuna==4.7.0
+transformers==4.49.0
+accelerate==1.9.0
 ```
 
 The LLM extension uses HuggingFace `transformers` and may require model access, enough GPU memory, and a configured HuggingFace cache/token depending on the selected model.

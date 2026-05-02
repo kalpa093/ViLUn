@@ -1,6 +1,7 @@
-torch
-torchvision
-numpy
-pillow
-optuna
-transformers
+torch==2.7.0
+torchvision==0.22.0
+numpy==1.26.4
+Pillow==8.4.0
+optuna==4.7.0
+transformers==4.49.0
+accelerate==1.9.0
