@@ -1,35 +1,3 @@
-"""
-ViLUN for LLM — CIFAR10 Image Classification
-=============================================
-기존 vilun.py 구조를 그대로 유지하되,
-original model만 LLM(ViT 방식 image encoder + classification head)으로 교체.
-
-변경점:
-  original model : CNN/ResNet → LLMVisionClassifier (Qwen2.5-7B / Llama-3.2-3B)
-                                이미지를 patch embed → LLM encoder → CLS head
-  expert  model  : 기존 소형 모델(CNN/LeNet/ResNet18/MLP/RNN) + Qwen2.5-1.5B
-  나머지 전체    : 기존 vilun.py와 동일
-
-평가:
-  - 기존 4-quadrant (Acc + Loss) : 동일
-  - Forget/Retain Perplexity 추가: image→patch token으로 변환 후 LLM loss 계산
-
-실행 예시:
-  # Standard ViLUN
-  python vilun_llm.py \\
-      --mode standard \\
-      --orig_model Qwen/Qwen2.5-7B \\
-      --expert_model cnn \\
-      --device_orig cuda:0 --device_expert cuda:1
-
-  # Held-out ViLUN
-  python vilun_llm.py \\
-      --mode heldout \\
-      --orig_model meta-llama/Llama-3.2-3B \\
-      --expert_model qwen1.5b \\
-      --device_orig cuda:0 --device_expert cuda:2
-"""
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -45,9 +13,6 @@ import argparse
 import csv
 import copy
 import time
-
-                                            
-         
                                             
 def set_seed(seed=42):
     random.seed(seed)
@@ -141,21 +106,6 @@ def build_heldout_loader(test_set, heldout_ratio, batch_size=16):
                                                                     
                                             
 class LLMVisionClassifier(nn.Module):
-    """
-    HuggingFace LLM backbone + patch embedding + classification head.
-
-    이미지 처리 흐름:
-      (B, 3, 224, 224)
-        → PatchEmbed: (B, num_patches, hidden_size)
-        → LLM encoder (일부 레이어만 사용, 메모리 절감)
-        → CLS pooling: (B, hidden_size)
-        → Linear head: (B, num_classes)
-
-    메모리 절감 전략:
-      - gradient checkpointing 활성화
-      - LLM 레이어 수를 --llm_layers로 제한 (기본 8)
-      - bf16으로 로드
-    """
     def __init__(self, model_name, num_classes=10, patch_size=16, img_size=224,
                  num_layers=8, device='cuda:0'):
         super().__init__()
@@ -513,7 +463,6 @@ def fit_feature_projector(projector, expert_model, teacher_model, loader,
                                     
                                             
 def train_standard(model, loader, device, epochs=10, lr=1e-3, patience=5, is_llm=False):
-    """기존 vilun.py train_standard와 동일. LLM은 lr/grad_clip 조정."""
     model.train()
     lr_actual  = 2e-5 if is_llm else lr
     optimizer  = optim.AdamW(model.parameters(), lr=lr_actual)
@@ -593,10 +542,6 @@ def evaluate_4_quadrant(model, train_set, test_set, forget_indices, device, verb
 
 @torch.no_grad()
 def evaluate_ppl(model, loader, device):
-    """
-    LLM 추가 지표: 이미지 배치에 대한 cross-entropy를 perplexity로 변환.
-    분류 loss exp()로 PPL 근사 — LLM 특성 반영.
-    """
     model.eval()
     total_loss, total_n = 0.0, 0
     for imgs, labels in loader:
@@ -612,7 +557,6 @@ def evaluate_ppl(model, loader, device):
 
 def evaluate_full(model, train_set, test_set, forget_indices, device,
                   forget_loader, retain_loader, verbose=True):
-    """4-quadrant Acc + Forget/Retain PPL 통합 평가."""
     res = evaluate_4_quadrant(model, train_set, test_set, forget_indices, device, verbose)
 
     forget_ppl = evaluate_ppl(model, forget_loader, device)
@@ -635,11 +579,6 @@ def run_unlearning(args, orig_model, expert_model,
                    train_set, test_set,
                    eval_forget_loader, eval_retain_loader,
                    heldout_loader=None):
-    """
-    mode='standard' : forget data 기반 (기존 vilun.py)
-    mode='heldout'  : heldout data 기반 (vilun.py)
-    loss 부호만 다르고 나머지는 동일.
-    """
     is_heldout    = (args.mode == 'heldout')
     active_loader = heldout_loader if is_heldout else forget_loader
     device_orig   = args.device_orig
@@ -975,9 +914,9 @@ if __name__ == '__main__':
     parser.add_argument('--expert_model', type=str, default='cnn',
                         choices=['cnn', 'lenet', 'resnet18', 'resnet50', 'mlp', 'rnn', 'qwen1.5b'])
     parser.add_argument('--original',     type=str, default=None,
-                        help='Fine-tuned checkpoint .pt. 없으면 새로 학습.')
+                        help='Fine-tuned checkpoint .pt.')
     parser.add_argument('--llm_layers',   type=int, default=8,
-                        help='LLM에서 사용할 레이어 수 (메모리 절감, default=8)')
+                        help='layer for llm')
 
     parser.add_argument('--data_dir',     type=str,   default='./data')
     parser.add_argument('--target_id',    type=int,   default=0)
