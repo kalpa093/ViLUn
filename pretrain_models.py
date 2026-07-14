@@ -1,24 +1,13 @@
 """
 pretrain_models.py
 ─────────────────────────────────────────────────────────────────────────────
-실험 시작 전 필요한 모든 모델과 forget_indices를 미리 생성합니다.
-
-생성 목록:
-  1. Forget indices (dataset별 공용) → history/forget_indices_{dataset}_{model}_seed{seed}.pt
-     - 모든 기법이 동일한 forget set을 공유
-     - vilun/vilun_heldout용 expert-tagged 심볼릭 복사본도 생성
+  1. Forget indices → history/forget_indices_{dataset}_{model}_seed{seed}.pt
 
   2. Original models → saved_models/original_{dataset}_{model}_seed{seed}.pth
-     - 모든 기법(delete, salun, ps, vilun, vilun_heldout, GA)이 공유
-     - 성능 평가 결과 → history/pretrain_original_{dataset}_{model}_seed{seed}.csv
 
   3. Expert (villain) models → saved_models/expert_{dataset}_{expert_model}_seed{seed}.pth
-     - forget set으로 학습
-     - 성능 평가 결과 → history/pretrain_expert_{dataset}_{expert_model}_seed{seed}.csv
 
-사용법:
-  python pretrain_models.py --data_dir ./data --save_dir ./saved_models \\
-      --history_dir ./history --seed 42 --gpus 0 1 2
+  python pretrain_models.py --data_dir ./data --save_dir ./saved_models --history_dir ./history --seed 42 --gpus 0 1 2
 """
 
 import os
