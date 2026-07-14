@@ -828,10 +828,7 @@ def main():
                         help='After expert pretraining, run logit-based MIA on saved expert checkpoints')
     parser.add_argument('--force', type=str, nargs='*', default=None,
                         metavar='FILENAME',
-                        help=('재생성할 모델 파일명 목록 (확장자 포함, 공백 구분). '
-                              '예: --force expert_cifar100_rnn_seed42.pth '
-                              'original_cifar10_cnn_seed42.pth\n'
-                              '--force 단독 사용 시 모든 모델을 강제 재생성.'))
+                        help=('model file'))
     args = parser.parse_args()
     args.force_all = (args.force is not None and len(args.force) == 0)
     args.force_list = set(args.force) if args.force else set()
