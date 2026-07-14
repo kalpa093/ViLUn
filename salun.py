@@ -28,15 +28,11 @@ from PIL import Image
 
                                                     
 class SaliencyPruner:
-    """Forget Set에 대한 Gradient. Saliency Map(Mask)을 생성"""
     def __init__(self, model, device='cuda'):
         self.model  = model
         self.device = device
 
     def compute_gradients(self, dataloader, criterion):
-        """데이터셋 전체 Gradient"""
-                                                                        
-                                                            
         self.model.eval()
         self.model.zero_grad()
 
