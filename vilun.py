@@ -15,10 +15,7 @@ import csv
 import copy
 import json
 import optuna
-import time
-
-                                            
-                                
+import time                  
                                             
 def set_seed(seed=42):
     random.seed(seed)
@@ -51,7 +48,6 @@ class EarlyStopping:
             self.best_weights = copy.deepcopy(model.state_dict())
             self.counter = 0
 
-
 def get_tuned_params_path(args):
     os.makedirs(args.history_dir, exist_ok=True)
     return os.path.join(
@@ -59,14 +55,12 @@ def get_tuned_params_path(args):
         f"tuned_params_vilun_heldout_{args.dataset}_{args.model}_{args.expert_model}_seed{args.seed}.json"
     )
 
-
 def load_cached_tuned_params(args):
     path = get_tuned_params_path(args)
     if not os.path.exists(path):
         return None
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
-
 
 def save_tuned_params(args, params, best_score=None):
     payload = {
@@ -87,10 +81,7 @@ def save_tuned_params(args, params, best_score=None):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2)
     print(f"[Save] Tuned hyperparameters -> {path}")
-
-                                            
-                
-                                            
+                                      
 def load_yale_custom(root_dir, img_size=64):
     search_path = os.path.join(root_dir, "subject*")
     file_list = glob.glob(search_path)
@@ -127,7 +118,6 @@ def load_yale_custom(root_dir, img_size=64):
     unique_labels = torch.unique(torch.stack(y_list))
     return full_dataset, len(unique_labels), 1
 
-
 def find_tinyimagenet_root(data_dir):
     project_dir = os.path.dirname(os.path.abspath(data_dir))
     candidates = [
@@ -142,7 +132,6 @@ def find_tinyimagenet_root(data_dir):
         if os.path.isdir(os.path.join(path, 'train')) and os.path.isdir(os.path.join(path, 'val')):
             return path
     raise FileNotFoundError("TinyImageNet not found under data_dir; expected tiny-imagenet-200/train and val.")
-
 
 class TinyImageNetValDataset(Dataset):
     def __init__(self, root, class_to_idx, transform=None):
@@ -210,9 +199,7 @@ def load_dataset_factory(args):
     else:
         raise ValueError(f"Unknown dataset: {args.dataset}")
 
-                                            
-          
-                                            
+                                   
 class ResNet18Network(nn.Module):
     def __init__(self, in_channels=3, num_classes=10):
         super(ResNet18Network, self).__init__()
@@ -341,10 +328,7 @@ def feature_gradient_repel_loss(student_model, expert_model, projector, data, ma
 
     student_score = (feat_student * direction).sum()
     grad_student = torch.autograd.grad(student_score, data_student, create_graph=True)[0]
-
-                                                                         
-                                                                          
-                                                                            
+                                                                    
     with torch.backends.cudnn.flags(enabled=False):
         _, feat_expert_raw = expert_model(data_expert, return_features=True)
         feat_expert = projector(feat_expert_raw)
@@ -356,22 +340,18 @@ def feature_gradient_repel_loss(student_model, expert_model, projector, data, ma
     cosine = F.cosine_similarity(grad_student, grad_expert, dim=1)
     return F.relu(cosine - margin).pow(2).mean()
 
-
 def heldout_consistency_loss(student_logits, teacher_logits):
     """Preserve original-model behavior on auxiliary held-out samples."""
     teacher_probs = F.softmax(teacher_logits.detach(), dim=1)
     student_log_probs = F.log_softmax(student_logits, dim=1)
     return F.kl_div(student_log_probs, teacher_probs, reduction="batchmean")
 
-
 def heldout_ce_loss(student_logits, targets):
     """Preserve retain behavior on held-out data using supervised CE."""
     return F.cross_entropy(student_logits, targets)
 
-
 def feature_preserve_loss(current_features, teacher_features):
     return (1.0 - F.cosine_similarity(current_features, teacher_features.detach(), dim=1)).mean()
-
 
 def fit_feature_projector(projector, expert_model, teacher_model, loader, device, epochs=3, lr=1e-3):
     projector.train()
@@ -405,7 +385,6 @@ def get_model(model_name, in_channels, num_classes, img_size):
     elif model_name == 'rnn': return RNNNetwork(in_channels, num_classes, img_size), 256
     else: raise ValueError(f"Unknown model: {model_name}")
 
-
 def is_classifier_head_key(key):
     return (
         key in {'classifier.weight', 'classifier.bias'}
@@ -413,11 +392,9 @@ def is_classifier_head_key(key):
         or key in {'model.heads.head.weight', 'model.heads.head.bias'}
     )
 
-
 def export_headless_state(model):
     return {key: value.detach().cpu() for key, value in model.state_dict().items()
             if not is_classifier_head_key(key)}
-
 
 def load_expert_state(model, path, device):
     """Load a villain checkpoint, allowing the public checkpoint to omit logits."""
@@ -434,10 +411,7 @@ def load_expert_state(model, path, device):
     head_missing = [key for key in missing if is_classifier_head_key(key)]
     if head_missing:
         print(f"  >> Expert checkpoint omits logit head; using random unused head: {head_missing}")
-
-                                            
-                     
-                                            
+                                    
 def evaluate_4_quadrant(model, train_set, test_set, forget_indices, device, verbose=True,
                         test_exclude_idx=None):
     """Sample-target evaluation using forget sample indices.
@@ -456,8 +430,7 @@ def evaluate_4_quadrant(model, train_set, test_set, forget_indices, device, verb
     def make_loader(dataset, indices):
         if len(indices) == 0: return None
         return DataLoader(Subset(dataset, indices), batch_size=128, shuffle=False)
-
-                                                                           
+                                                              
     if test_exclude_idx is not None and len(test_exclude_idx) > 0:
         exclude_set = set(test_exclude_idx.tolist() if hasattr(test_exclude_idx, 'tolist') else list(test_exclude_idx))
         test_keep_idx = [i for i in range(len(test_set)) if i not in exclude_set]
@@ -496,10 +469,7 @@ def evaluate_4_quadrant(model, train_set, test_set, forget_indices, device, verb
             if verbose: print(f"  {name:<15} | {acc:6.2f}     | {avg_loss:.4f}")
     if verbose: print("  " + "-"*40)
     return results
-
-                                            
-                                     
-                                            
+                            
 def train_standard(model, loader, device, epochs=50, lr=1e-3, patience=50):
     model.train()
     optimizer = optim.Adam(model.parameters(), lr=lr)
@@ -583,10 +553,7 @@ def train_divergent_expert(expert_model, original_model, loader, device,
     if best_weights is not None:
         expert_model.load_state_dict(best_weights)
     return expert_model
-
-                                            
-                           
-                                            
+                              
 def build_heldout_loader(aux_set, heldout_ratio, batch_size=64, seed=42, class_balanced=True):
     if heldout_ratio <= 0:
         raise ValueError("heldout_ratio must be > 0 for ViLUn")
@@ -621,7 +588,6 @@ def build_heldout_loader(aux_set, heldout_ratio, batch_size=64, seed=42, class_b
     print(f"  [Held-out] {len(heldout_idx)}/{len(aux_idx)} auxiliary samples selected ({mode}, ratio={heldout_ratio})")
     return heldout_loader, heldout_idx
 
-
 def get_dataset_labels(dataset):
     if hasattr(dataset, 'targets'):
         targets = dataset.targets
@@ -629,7 +595,6 @@ def get_dataset_labels(dataset):
     if hasattr(dataset, 'tensors'):
         return dataset.tensors[1]
     return torch.tensor([y for _, y in dataset])
-
 
 def build_anchor_loader(train_set, forget_idx, anchor_ratio, batch_size=64, seed=42, class_balanced=True):
     """Build a small non-forget anchor set for KD stability."""
@@ -745,27 +710,6 @@ def epoch_selection_score(metrics, retrain_target):
         + abs(metrics["train_forget_acc"] - retrain_target["train_forget_acc"])
     ) / 3.0
 
-                                            
-                                  
-                                            
-          
-                                   
-                                 
-                                                        
-                                                 
- 
-       
-                                                                       
-                                                     
-                                                 
- 
-     
-                                
-                                                   
-                                
-                                         
-                                 
-
 def run_heldout_unlearning(args, original_model, expert_model, train_full_loader, heldout_loader,
                             retain_loader, orig_feat_dim, expert_feat_dim, device):
     projector = FeatureProjector(input_dim=expert_feat_dim, output_dim=orig_feat_dim).to(device)
@@ -815,10 +759,7 @@ def run_heldout_unlearning(args, original_model, expert_model, train_full_loader
 
     if early_stopper.best_weights is not None:
         original_model.load_state_dict(early_stopper.best_weights)
-
-                                            
-                                    
-                                            
+                      
 def objective_heldout(trial, args, base_orig_model, expert_model, train_set, test_set,
                        forget_idx, train_full_loader, heldout_loader, retain_loader, heldout_idx,
                        orig_feat_dim, expert_feat_dim, device):
@@ -882,10 +823,6 @@ def objective_heldout(trial, args, base_orig_model, expert_model, train_set, tes
 
     return early_stopper.best_score if early_stopper.best_score is not None else score
 
-                                            
-                 
-                                            
-
 def resolve_model(args):
     """
     Return the effective model name for the given dataset.
@@ -917,9 +854,7 @@ def run_pipeline(args):
 
     train_set, test_set, num_classes, in_channels = load_dataset_factory(args)
     img_size = 64 if args.dataset in ('yale', 'tinyimagenet') else 32
-
-                                                                  
-                                                                     
+                                               
     _fi_path = os.path.join(args.history_dir,
                             f"forget_indices_{args.dataset}_{args.model}_seed{args.seed}.pt")
     if os.path.exists(_fi_path):
@@ -953,17 +888,14 @@ def run_pipeline(args):
         batch_size=64, seed=args.seed,
         class_balanced=not args.no_class_balanced_retain
     )
-
-                                                
-                             
-                                                
+                       
     print(f"[Step 1] Initializing Original Model ({args.model.upper()})...")
     original_model, orig_feat_dim = get_model(args.model, in_channels, num_classes, img_size)
     original_model = original_model.to(device)
     os.makedirs(args.save_path, exist_ok=True)
 
     time_orig_train = 0.0
-                                                       
+
     cached_orig = os.path.join(args.save_path,
                                f"original_{args.dataset}_{args.model}_seed{args.seed}.pth")
     if args.original is not None and os.path.exists(args.original):
@@ -984,10 +916,7 @@ def run_pipeline(args):
 
     print("\n[Baseline] Original model performance:")
     baseline_res = evaluate_4_quadrant(original_model, train_set, test_set, forget_idx, device)
-
-                                                
-                                            
-                                                
+   
     print(f"\n[Step 2] Expert Model ({args.expert_model.upper()}) — simulates requester side...")
     expert_model, expert_feat_dim = get_model(args.expert_model, in_channels, num_classes, img_size)
     expert_model = expert_model.to(device)
@@ -1023,9 +952,6 @@ def run_pipeline(args):
         print(f"  [Time] {time_expert_train:.2f}s → saved to {cached_expert}")
     print(f"  >> Expert model params handed to model owner. Forget data stays with requester.")
 
-                                                
-                                         
-                                                
     print(f"\n[Step 3] Building Held-out Auxiliary Loader (model owner side, no forget data)...")
     heldout_loader, heldout_idx = build_heldout_loader(
         test_set, args.heldout_ratio,
@@ -1033,9 +959,6 @@ def run_pipeline(args):
         class_balanced=not args.no_class_balanced_anchor
     )
 
-                                                
-                                          
-                                                
     print(f"\n[Step 5] Held-out Unlearning (beta={args.beta:.2f}, lr={args.unlearn_lr:.6f})...")
     print("  >> Model owner uses: retain KL + held-out feature repulsion")
     print(f"  >> Held-out auxiliary set: {len(heldout_idx)} samples (ratio={args.heldout_ratio})")
@@ -1135,24 +1058,18 @@ def run_pipeline(args):
     time_unlearn_total = time.time() - start
     time_unlearn = max(0.0, time_unlearn_total - time_eval)
 
-                                                
-            
-                                                
     os.makedirs(args.save_path, exist_ok=True)
     os.makedirs(args.history_dir, exist_ok=True)
-
-                                           
+   
     save_stem = args.save_tag or f"{args.dataset}_{args.model}_{args.expert_model}_seed{args.seed}"
     file_tag = f"vilun_heldout_{save_stem}"
 
-               
     unlearned_path = os.path.join(args.save_path, f"unlearned_{file_tag}.pth")
     if best_state is not None:
         original_model.load_state_dict(best_state)
     torch.save(original_model.state_dict(), unlearned_path)
     print(f"\n[Save] Unlearned model → '{unlearned_path}'")
 
-                                                                 
     forget_indices_path = os.path.join(
         args.history_dir,
         f"forget_indices_{args.dataset}_{args.model}_seed{args.seed}.pt"
@@ -1163,7 +1080,6 @@ def run_pipeline(args):
     else:
         print(f"[Save] Forget indices already exist: '{forget_indices_path}'")
 
-                           
     history_path = os.path.join(args.history_dir, f"{file_tag}.csv")
     with open(history_path, mode='w', newline='') as f:
         writer = csv.writer(f)
@@ -1171,7 +1087,6 @@ def run_pipeline(args):
         writer.writerows(zip(*history.values()))
     print(f"[Save] Epoch history  → '{history_path}'")
 
-                              
     summary_path = os.path.join(args.history_dir, "summary_heldout.csv")
     best_epoch = history['epoch'][best_idx]
     best_train_retain_acc = history['train_retain_acc'][best_idx]
@@ -1248,7 +1163,6 @@ if __name__ == "__main__":
     parser.add_argument("--patience",   type=int,   default=50,
                         help="Early stopping patience for unlearning")
 
-                    
     parser.add_argument("--heldout_ratio", type=float, default=0.1,
                         help="Ratio of non-forget auxiliary samples used as held-out data")
     parser.add_argument("--retain_ratio", type=float, default=1.0,
