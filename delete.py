@@ -442,8 +442,6 @@ def run_pipeline(args):
     print(f"  lr={args.unlearn_lr}, epochs={args.unlearn_epochs}, patience={args.patience}")
 
     optimizer    = optim.Adam(model.parameters(), lr=args.unlearn_lr)
-    early_stopper = EarlyStopping(patience=args.patience, mode='max')
-
     history = {
         'epoch': [], 'delete_loss': [],
         'train_forget_acc': [], 'train_forget_loss': [],
@@ -482,16 +480,6 @@ def run_pipeline(args):
         history['test_retain_acc'].append(eval_res['Test_Retain ']['acc'])
         history['test_retain_loss'].append(eval_res['Test_Retain ']['loss'])
         t_f_acc = eval_res.get('Train_Forget', {}).get('acc', float('nan'))
-        early_stopper(eval_res['Test_Retain ']['acc'], model, epoch + 1)
-
-        if early_stopper.early_stop:
-            print(f"  [Early Stop] Unlearning stopped at epoch {epoch+1}.")
-            break
-
-    if early_stopper.best_weights is not None:
-        print("  >> Restoring best unlearning weights...")
-        model.load_state_dict(early_stopper.best_weights)
-
     if torch.cuda.is_available(): torch.cuda.synchronize()
     time_unlearn = time.time() - t0
     print(f"  [Time] Unlearning: {time_unlearn:.2f}s")
@@ -533,15 +521,15 @@ def run_pipeline(args):
         if not summary_exists:
             writer.writerow([
                 'Method', 'Dataset', 'Model', 'N_Forget', 'Seed',
-                'Unlearn_LR', 'Best_Epoch',
-                'Best_Train_Retain_Acc', 'Best_Test_Retain_Acc', 'Best_TrainForget_Acc',
+                'Unlearn_LR', 'Final_Epoch',
+                'Final_Train_Retain_Acc', 'Final_Test_Retain_Acc', 'Final_TrainForget_Acc',
                 'Time_Orig_Train', 'Time_Unlearn'
             ])
         writer.writerow([
             'DELETE',
             args.dataset, args.model, len(forget_indices), args.seed,
             args.unlearn_lr,
-            early_stopper.best_epoch,
+            history['epoch'][-1],
             round(final_res.get('Train_Retain', {}).get('acc', float('nan')), 4),
             round(final_res['Test_Retain ']['acc'], 4),
             round(final_res.get('Train_Forget', {}).get('acc', float('nan')), 4),
@@ -556,7 +544,7 @@ if __name__ == "__main__":
 
           
     parser.add_argument("--dataset",    type=str, default="cifar10",
-                        choices=["yale", "mnist", "cifar10", "cifar100"])
+                        choices=["yale", "mnist", "cifar10", "cifar100", "tinyimagenet"])
     parser.add_argument("--data_dir",   type=str, default="./data")
     parser.add_argument("--target_id",  type=int, default=0,
                         help="Yale only: subject index to unlearn (0-14). Ignored for CIFAR/MNIST.")

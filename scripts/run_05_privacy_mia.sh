@@ -3,15 +3,26 @@ set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 print_config
 
-for ds in "${DATASETS[@]}"; do
-  om="${DS_MODEL[$ds]}"
-  vm="rnn"
-  main_h="main_vilun_${ds}_${om}_${vm}_a$(fmt_token "$DEFAULT_ALPHA")_b$(fmt_token "$DEFAULT_BETA")_seed${SEED}"
-  main_f="main_vilunf_${ds}_${om}_${vm}_a$(fmt_token "$DEFAULT_ALPHA")_b$(fmt_token "$DEFAULT_BETA")_seed${SEED}"
-  run_mia "vilun_heldout" "$ds" "$om" "${SAVE_DIR}/unlearned_vilun_heldout_${main_h}.pth" "$main_h"
-  run_mia "vilun" "$ds" "$om" "${SAVE_DIR}/vilun_${main_f}.pth" "$main_f"
-done
-wait_all
+PYTHON_BIN="$PYTHON_BIN" \
+SOURCE_ROOT="$ROOT_DIR" \
+DATA_DIR="$DATA_DIR" \
+SEED="$SEED" \
+GPUS="${GPUS[*]}" \
+DATASETS="${DATASETS[*]}" \
+BASELINE_MIA_OUTPUT_ROOT="${ROOT_DIR}/baseline_mia_metrics" \
+bash "${REPO_DIR}/run_existing_baseline_mia_metrics.sh"
+
+PYTHON_BIN="$PYTHON_BIN" \
+SOURCE_ROOT="$ROOT_DIR" \
+DATA_DIR="$DATA_DIR" \
+SEED="$SEED" \
+GPUS="${GPUS[*]}" \
+DATASETS="${DATASETS[*]}" \
+DEFAULT_ALPHA="$DEFAULT_ALPHA" \
+DEFAULT_BETA="$DEFAULT_BETA" \
+BASELINE_SUMMARY="${ROOT_DIR}/baseline_mia_metrics/summary_baseline_mia_metrics.csv" \
+UNLEARNED_MIA_OUTPUT_ROOT="${ROOT_DIR}/unlearned_mia_metrics" \
+bash "${REPO_DIR}/run_existing_unlearned_mia_metrics.sh"
 
 for ds in "${DATASETS[@]}"; do
   om="${DS_MODEL[$ds]}"
@@ -25,3 +36,8 @@ for ds in "${DATASETS[@]}"; do
   fi
 done
 wait_all
+
+"$PYTHON_BIN" "${REPO_DIR}/summarize_villain_mia_runs.py" \
+  --output_root "${ROOT_DIR}/villain_mia" \
+  --expert_model rnn \
+  --seed "$SEED"

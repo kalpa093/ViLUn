@@ -501,8 +501,6 @@ def train_divergent_expert(expert_model, original_model, loader, device,
                            diverge_gamma=0.5):
     expert_model.train()
     original_model.eval()
-    for param in original_model.parameters():
-        param.requires_grad = False
 
     projector = nn.Identity() if expert_feat_dim == orig_feat_dim else FeatureProjector(expert_feat_dim, orig_feat_dim).to(device)
     params = list(expert_model.parameters())
@@ -676,42 +674,9 @@ def build_retain_loader(train_set, forget_idx, retain_ratio=1.0, batch_size=64, 
     return loader, retain_idx
 
 
-def load_retrain_target(history_dir, dataset, model, seed):
-    """Load retrain reference metrics used to select the closest unlearning epoch."""
-    path = os.path.join(history_dir, "summary_retrain_ga.csv")
-    if not os.path.exists(path):
-        return None
-    with open(path, newline="", encoding="utf-8") as f:
-        for row in csv.DictReader(f):
-            if (
-                row.get("unlearning") == "retrain"
-                and row.get("dataset") == dataset
-                and row.get("model") == model
-                and str(row.get("seed")) == str(seed)
-            ):
-                try:
-                    return {
-                        "train_retain_acc": float(row["best_train_retain_acc"]),
-                        "test_retain_acc": float(row["best_test_retain_acc"]),
-                        "train_forget_acc": float(row["best_train_forget_acc"]),
-                    }
-                except Exception:
-                    return None
-    return None
-
-
-def epoch_selection_score(metrics, retrain_target):
-    """Lower is better. Use Total-MAE to retrain when available, otherwise max test retain."""
-    if retrain_target is None:
-        return -metrics["test_retain_acc"]
-    return (
-        abs(metrics["train_retain_acc"] - retrain_target["train_retain_acc"])
-        + abs(metrics["test_retain_acc"] - retrain_target["test_retain_acc"])
-        + abs(metrics["train_forget_acc"] - retrain_target["train_forget_acc"])
-    ) / 3.0
-
 def run_heldout_unlearning(args, original_model, expert_model, train_full_loader, heldout_loader,
                             retain_loader, orig_feat_dim, expert_feat_dim, device):
+    original_model.requires_grad_(True)
     projector = FeatureProjector(input_dim=expert_feat_dim, output_dim=orig_feat_dim).to(device)
     expert_model.eval()
     frozen_teacher = copy.deepcopy(original_model).to(device)
@@ -767,6 +732,7 @@ def objective_heldout(trial, args, base_orig_model, expert_model, train_set, tes
     unlearn_lr = trial.suggest_float("unlearn_lr", 1e-6, 1e-3, log=True)
 
     model     = copy.deepcopy(base_orig_model)
+    model.requires_grad_(True)
     projector = FeatureProjector(input_dim=expert_feat_dim, output_dim=orig_feat_dim).to(device)
 
     expert_model.eval()
@@ -854,11 +820,14 @@ def run_pipeline(args):
 
     train_set, test_set, num_classes, in_channels = load_dataset_factory(args)
     img_size = 64 if args.dataset in ('yale', 'tinyimagenet') else 32
+    save_stem = args.save_tag or f"{args.dataset}_{args.model}_{args.expert_model}_seed{args.seed}"
                                                
-    _fi_path = os.path.join(args.history_dir,
-                            f"forget_indices_{args.dataset}_{args.model}_seed{args.seed}.pt")
+    _fi_path = args.forget_indices_path or os.path.join(
+        args.history_dir,
+        f"forget_indices_{args.dataset}_{args.model}_seed{args.seed}.pt"
+    )
     if os.path.exists(_fi_path):
-        forget_idx = torch.load(_fi_path, map_location='cpu')
+        forget_idx = torch.load(_fi_path, map_location='cpu').long()
         print(f"[Load] Forget indices ← {_fi_path} ({len(forget_idx)} samples)", flush=True)
     else:
                          
@@ -876,9 +845,13 @@ def run_pipeline(args):
         else:
             random.seed(args.seed)                    
             _n = len(train_set)
-            _nf = max(1, int(0.1 * _n))
-            forget_idx = torch.tensor(random.sample(range(_n), _nf))
-            print(f"[{args.dataset}] Sampled {_nf}/{_n} (10%) as forget set")
+            if args.forget_ratio <= 0 or args.forget_ratio > 1:
+                raise ValueError(f"--forget_ratio must be in (0, 1], got {args.forget_ratio}")
+            _nf = max(1, min(_n, int(round(args.forget_ratio * _n))))
+            forget_idx = torch.tensor(random.sample(range(_n), _nf)).long()
+            print(f"[{args.dataset}] Sampled {_nf}/{_n} ({args.forget_ratio * 100:.4g}%) as forget set")
+
+    forget_indices_path = _fi_path
 
     forget_loader     = DataLoader(Subset(train_set, forget_idx), batch_size=64, shuffle=True)                      
     train_full_loader = DataLoader(train_set, batch_size=64, shuffle=True)
@@ -922,10 +895,8 @@ def run_pipeline(args):
     expert_model = expert_model.to(device)
     time_expert_train = 0.0
                                                                
-    cached_expert = os.path.join(
-        args.save_path,
-        f"expert_{args.dataset}_{args.expert_model}_seed{args.seed}.pth"
-    )
+    expert_cache_stem = save_stem if args.save_tag else f"{args.dataset}_{args.expert_model}_seed{args.seed}"
+    cached_expert = os.path.join(args.save_path, f"expert_{expert_cache_stem}.pth")
     if args.random_expert:
         print("  >> Using randomly initialized headless villain backbone without forget-set training.")
         torch.save(export_headless_state(expert_model), cached_expert)
@@ -974,6 +945,7 @@ def run_pipeline(args):
         projector, expert_model, frozen_teacher, retain_loader, device,
         epochs=args.projector_epochs, lr=args.projector_lr
     )
+    original_model.requires_grad_(True)
     optimizer     = optim.Adam(original_model.parameters(), lr=args.unlearn_lr)
 
     history = {
@@ -985,10 +957,6 @@ def run_pipeline(args):
 
     start = time.time()
     time_eval = 0.0
-    retrain_target = load_retrain_target(args.history_dir, args.dataset, args.model, args.seed)
-    best_state = None
-    best_idx = 0
-    best_score = float("inf")
     retain_iter = iter(retain_loader)
     for epoch in range(args.unlearn_epochs):
         original_model.train(); projector.train()
@@ -1043,17 +1011,6 @@ def run_pipeline(args):
         history['test_retain_acc'].append(eval_res['Test_Retain ']['acc'])
         history['test_retain_loss'].append(eval_res['Test_Retain ']['loss'])
 
-        current_metrics = {
-            "train_retain_acc": history['train_retain_acc'][-1],
-            "test_retain_acc": history['test_retain_acc'][-1],
-            "train_forget_acc": history['train_forget_acc'][-1],
-        }
-        current_score = epoch_selection_score(current_metrics, retrain_target)
-        if current_score < best_score:
-            best_score = current_score
-            best_idx = len(history['epoch']) - 1
-            best_state = copy.deepcopy(original_model.state_dict())
-
     if torch.cuda.is_available(): torch.cuda.synchronize()
     time_unlearn_total = time.time() - start
     time_unlearn = max(0.0, time_unlearn_total - time_eval)
@@ -1065,16 +1022,13 @@ def run_pipeline(args):
     file_tag = f"vilun_heldout_{save_stem}"
 
     unlearned_path = os.path.join(args.save_path, f"unlearned_{file_tag}.pth")
-    if best_state is not None:
-        original_model.load_state_dict(best_state)
     torch.save(original_model.state_dict(), unlearned_path)
     print(f"\n[Save] Unlearned model → '{unlearned_path}'")
 
-    forget_indices_path = os.path.join(
-        args.history_dir,
-        f"forget_indices_{args.dataset}_{args.model}_seed{args.seed}.pt"
-    )
     if not os.path.exists(forget_indices_path):
+        out_dir = os.path.dirname(forget_indices_path)
+        if out_dir:
+            os.makedirs(out_dir, exist_ok=True)
         torch.save(forget_idx, forget_indices_path)
         print(f"[Save] Forget indices saved to '{forget_indices_path}'")
     else:
@@ -1088,15 +1042,16 @@ def run_pipeline(args):
     print(f"[Save] Epoch history  → '{history_path}'")
 
     summary_path = os.path.join(args.history_dir, "summary_heldout.csv")
-    best_epoch = history['epoch'][best_idx]
-    best_train_retain_acc = history['train_retain_acc'][best_idx]
-    best_test_retain_acc = history['test_retain_acc'][best_idx]
-    best_forget_acc = history['train_forget_acc'][best_idx]
+    final_idx = len(history['epoch']) - 1
+    final_epoch = history['epoch'][final_idx]
+    final_train_retain_acc = history['train_retain_acc'][final_idx]
+    final_test_retain_acc = history['test_retain_acc'][final_idx]
+    final_forget_acc = history['train_forget_acc'][final_idx]
     summary_header = [
         'Method', 'Dataset', 'Orig_Model', 'Expert_Model',
         'N_Forget', 'Seed', 'Alpha', 'Beta', 'Grad_Beta', 'Grad_Margin', 'Grad_Every',
         'Heldout_Ratio', 'Heldout_Objective', 'Save_Tag',
-        'Best_Epoch', 'Best_Train_Retain_Acc', 'Best_Test_Retain_Acc', 'Best_Train_Forget_Acc',
+        'Final_Epoch', 'Final_Train_Retain_Acc', 'Final_Test_Retain_Acc', 'Final_Train_Forget_Acc',
         'Time_Orig_Train(s)', 'Time_Expert_Train(s)', 'Time_Unlearn(s)', 'Time_Eval(s)',
         'Model_Path', 'Forget_Indices_Path'
     ]
@@ -1111,18 +1066,18 @@ def run_pipeline(args):
             len(forget_idx), args.seed, args.alpha, args.beta,
             args.grad_beta, args.grad_margin, args.grad_every,
             args.heldout_ratio, args.heldout_objective, save_stem,
-            best_epoch,
-            f"{best_train_retain_acc:.2f}", f"{best_test_retain_acc:.2f}", f"{best_forget_acc:.2f}",
+            final_epoch,
+            f"{final_train_retain_acc:.2f}", f"{final_test_retain_acc:.2f}", f"{final_forget_acc:.2f}",
             f"{time_orig_train:.2f}", f"{time_expert_train:.2f}", f"{time_unlearn:.2f}", f"{time_eval:.2f}",
             unlearned_path, forget_indices_path
         ])
     print(f"[Save] Summary        → '{summary_path}'")
 
     print(f"\n{'='*50}")
-    print(f"  [Result] Best Epoch     : {best_epoch}")
-    print(f"  [Result] Train Retain   : {best_train_retain_acc:.2f}%")
-    print(f"  [Result] Test Retain    : {best_test_retain_acc:.2f}%")
-    print(f"  [Result] Forget Acc     : {best_forget_acc:.2f}%")
+    print(f"  [Result] Final Epoch    : {final_epoch}")
+    print(f"  [Result] Train Retain   : {final_train_retain_acc:.2f}%")
+    print(f"  [Result] Test Retain    : {final_test_retain_acc:.2f}%")
+    print(f"  [Result] Forget Acc     : {final_forget_acc:.2f}%")
     print(f"  [Time]   Unlearn Updates: {time_unlearn:.2f}s")
     print(f"  [Time]   Evaluation     : {time_eval:.2f}s")
     print(f"{'='*50}")
@@ -1167,6 +1122,10 @@ if __name__ == "__main__":
                         help="Ratio of non-forget auxiliary samples used as held-out data")
     parser.add_argument("--retain_ratio", type=float, default=1.0,
                         help="Fraction of retain data used for retain CE")
+    parser.add_argument("--forget_ratio", type=float, default=0.1,
+                        help="Ratio sampled as the forget set if no forget-index file exists")
+    parser.add_argument("--forget_indices_path", type=str, default=None,
+                        help="Optional explicit forget-index file; use this for non-default forget ratios")
     parser.add_argument("--anchor_ratio", type=float, default=0.1,
                         help="Deprecated compatibility argument; ViLUn now uses held-out data for utility preservation")
     parser.add_argument("--anchor_alpha", type=float, default=2.0,

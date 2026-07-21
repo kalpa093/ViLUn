@@ -8,21 +8,27 @@ for ds in "${DATASETS[@]}"; do
   submit_once "baseline_ga_${ds}_${om}" "$PYTHON_BIN" "${REPO_DIR}/retrain_ga.py" \
     --unlearning gradient_ascent --dataset "$ds" --model "$om" \
     --data_dir "$DATA_DIR" --save_path "$SAVE_DIR" --history_dir "$HISTORY_DIR" \
-    --seed "$SEED" --original "${SAVE_DIR}/original_${ds}_${om}_seed${SEED}.pth"
-  submit_once "baseline_sisa_${ds}_${om}" "$PYTHON_BIN" "${REPO_DIR}/sisa_train.py" \
+    --seed "$SEED" --unlearn_lr "${GA_LR[$ds]}" \
+    --unlearn_epochs "${BASELINE_EPOCHS[$ds]}" \
+    --original "${SAVE_DIR}/original_${ds}_${om}_seed${SEED}.pth"
+  submit_from_dir "baseline_sisa_${ds}_${om}" "$ROOT_DIR" "$PYTHON_BIN" "${REPO_DIR}/sisa_train.py" \
     --dataset "$ds" --model "$om" --data_dir "$DATA_DIR" \
-    --save_dir "${ROOT_DIR}/sisa_models" --seed "$SEED" --unlearn
-  submit_once "baseline_salun_${ds}_${om}" "$PYTHON_BIN" "${REPO_DIR}/salun.py" \
+    --save_dir "${ROOT_DIR}/sisa_models" --seed "$SEED" --unlearn \
+    --shards 5 --slices 3 --epochs_per_slice "${SISA_EPOCHS[$ds]}"
+  submit_from_dir "baseline_salun_${ds}_${om}" "$ROOT_DIR" "$PYTHON_BIN" "${REPO_DIR}/salun.py" \
     --dataset "$ds" --model "$om" --data_dir "$DATA_DIR" \
     --save_dir "${ROOT_DIR}/salun_models" --seed "$SEED" \
+    --unlearn_lr "${SALUN_LR[$ds]}" --unlearn_epochs "${BASELINE_EPOCHS[$ds]}" \
     --load_path "${SAVE_DIR}/original_${ds}_${om}_seed${SEED}.pth"
-  submit_once "baseline_ps_${ds}_${om}" "$PYTHON_BIN" "${REPO_DIR}/ps.py" \
+  submit_from_dir "baseline_ps_${ds}_${om}" "$ROOT_DIR" "$PYTHON_BIN" "${REPO_DIR}/ps.py" \
     --dataset "$ds" --model "$om" --data_dir "$DATA_DIR" \
     --save_dir "${ROOT_DIR}/ps_models" --seed "$SEED" \
+    --lr "${PS_LR[$ds]}" --epochs "${BASELINE_EPOCHS[$ds]}" \
     --load_path "${SAVE_DIR}/original_${ds}_${om}_seed${SEED}.pth"
-  submit_once "baseline_delete_${ds}_${om}" "$PYTHON_BIN" "${REPO_DIR}/delete.py" \
+  submit_from_dir "baseline_delete_${ds}_${om}" "$ROOT_DIR" "$PYTHON_BIN" "${REPO_DIR}/delete.py" \
     --dataset "$ds" --model "$om" --data_dir "$DATA_DIR" \
     --save_path "$SAVE_DIR" --seed "$SEED" \
+    --unlearn_lr 0.00001 --unlearn_epochs "${BASELINE_EPOCHS[$ds]}" \
     --original "${SAVE_DIR}/original_${ds}_${om}_seed${SEED}.pth"
 done
 wait_all

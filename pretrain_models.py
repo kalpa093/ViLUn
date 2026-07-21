@@ -826,6 +826,10 @@ def main():
                         help='Keep classifier/logit head in saved expert checkpoints')
     parser.add_argument('--evaluate_expert_mia', action='store_true',
                         help='After expert pretraining, run logit-based MIA on saved expert checkpoints')
+    parser.add_argument('--main_only', action='store_true',
+                        help='Prepare only the default original models and RNN villains used in the main table')
+    parser.add_argument('--extra_original', nargs='*', default=[], metavar='DATASET:MODEL',
+                        help='Additional original checkpoints to prepare, e.g. cifar100:resnet18')
     parser.add_argument('--force', type=str, nargs='*', default=None,
                         metavar='FILENAME',
                         help=('model file'))
@@ -855,11 +859,12 @@ def main():
         fi = generate_and_save_forget_indices(dataset, train_set, args.seed, args.history_dir)
         forget_indices_map[(dataset, om)] = fi
                                               
-    cifar10_train, _, _, _, _ = load_dataset(ABLATION_DS, args.data_dir)
-    ablation_fi = generate_expert_forget_indices(
-        ABLATION_DS, cifar10_train, args.seed, args.history_dir)
-    for om in ALL_MODELS:
-        forget_indices_map[(ABLATION_DS, om)] = ablation_fi
+    if not args.main_only:
+        cifar10_train, _, _, _, _ = load_dataset(ABLATION_DS, args.data_dir)
+        ablation_fi = generate_expert_forget_indices(
+            ABLATION_DS, cifar10_train, args.seed, args.history_dir)
+        for om in ALL_MODELS:
+            forget_indices_map[(ABLATION_DS, om)] = ablation_fi
 
     print("\n[Step 1] Done. All forget indices saved.", flush=True)
 
@@ -913,11 +918,25 @@ def main():
             add_job('original', dataset, om, forget_idx=forget_indices_map[(dataset, om)])
 
                                        
-    for om in ALL_MODELS:
-        key = (ABLATION_DS, om)
+    if not args.main_only:
+        for om in ALL_MODELS:
+            key = (ABLATION_DS, om)
+            if key not in seen_orig:
+                seen_orig.add(key)
+                add_job('original', ABLATION_DS, om, forget_idx=forget_indices_map[(ABLATION_DS, om)])
+
+    for spec in args.extra_original:
+        try:
+            dataset, model_name = spec.split(':', 1)
+        except ValueError as exc:
+            raise ValueError(f"Invalid --extra_original value: {spec!r}") from exc
+        if dataset not in DATASETS:
+            raise ValueError(f"Unsupported extra-original dataset: {dataset}")
+        key = (dataset, model_name)
         if key not in seen_orig:
             seen_orig.add(key)
-            add_job('original', ABLATION_DS, om, forget_idx=forget_indices_map[(ABLATION_DS, om)])
+            default_key = (dataset, DS_MODEL[dataset])
+            add_job('original', dataset, model_name, forget_idx=forget_indices_map[default_key])
 
                                                                             
     seen_expert = set()
@@ -931,12 +950,13 @@ def main():
                     forget_idx=forget_indices_map[(dataset, om)])
 
                                                
-    for vm in ALL_MODELS:
-        key = (ABLATION_DS, vm)
-        if key not in seen_expert:
-            seen_expert.add(key)
-            add_job('expert', ABLATION_DS, vm,
-                    forget_idx=forget_indices_map[(ABLATION_DS, DS_MODEL[ABLATION_DS])])
+    if not args.main_only:
+        for vm in ALL_MODELS:
+            key = (ABLATION_DS, vm)
+            if key not in seen_expert:
+                seen_expert.add(key)
+                add_job('expert', ABLATION_DS, vm,
+                        forget_idx=forget_indices_map[(ABLATION_DS, DS_MODEL[ABLATION_DS])])
 
     print(f"\n[Step 2] Jobs to run: {len(jobs)} "
           f"(orig: {len(seen_orig)}, expert: {len(seen_expert)})", flush=True)

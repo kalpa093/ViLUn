@@ -18,11 +18,11 @@ GPUS=(${GPUS:-0 1 2})
 
 TRAIN_EPOCHS="${TRAIN_EPOCHS:-200}"
 UNLEARN_EPOCHS="${UNLEARN_EPOCHS:-50}"
-UNLEARN_LR="${UNLEARN_LR:-0.00005}"
+UNLEARN_LR="${UNLEARN_LR:-0.0001}"
 DEFAULT_ALPHA="${DEFAULT_ALPHA:-1}"
 DEFAULT_BETA="${DEFAULT_BETA:-2}"
-FEATURE_MARGIN="${FEATURE_MARGIN:--0.3}"
-DEFAULT_HELDOUT_RATIO="${DEFAULT_HELDOUT_RATIO:-0.1}"
+FEATURE_MARGIN="${FEATURE_MARGIN:--0.2}"
+DEFAULT_HELDOUT_RATIO="${DEFAULT_HELDOUT_RATIO:-0.05}"
 DEFAULT_RETAIN_RATIO="${DEFAULT_RETAIN_RATIO:-0.05}"
 
 ALPHA_VALUES=(${ALPHA_VALUES:-0.5 1 2 4})
@@ -31,16 +31,32 @@ HELDOUT_RATIOS=(${HELDOUT_RATIOS:-0.05 0.1 0.2 0.5})
 RETAIN_RATIOS=(${RETAIN_RATIOS:-0.05 0.1 0.5})
 MODELS=(${MODELS:-cnn mlp rnn resnet18 resnet50})
 DATASETS=(${DATASETS:-cifar10 cifar100 tinyimagenet})
-ARCH_DATASETS=(${ARCH_DATASETS:-cifar10 cifar100 tinyimagenet})
+ARCH_DATASETS=(${ARCH_DATASETS:-cifar10})
 CLASS_DATASETS=(${CLASS_DATASETS:-cifar10 cifar100})
 CLASS_TARGET_ID="${CLASS_TARGET_ID:-0}"
-LLM_EXPERTS=(${LLM_EXPERTS:-cnn rnn mlp})
+LLM_EXPERTS=(${LLM_EXPERTS:-cnn mlp rnn resnet18 resnet50})
 LLM_ORIG_MODEL="${LLM_ORIG_MODEL:-Qwen/Qwen2.5-3B}"
 
 declare -A DS_MODEL=(
   [cifar10]=resnet18
   [cifar100]=resnet50
   [tinyimagenet]=resnet50
+)
+
+declare -A GA_LR=(
+  [cifar10]=0.0001 [cifar100]=0.00001 [tinyimagenet]=0.0003
+)
+declare -A SALUN_LR=(
+  [cifar10]=0.001 [cifar100]=0.0000001 [tinyimagenet]=0.00001
+)
+declare -A PS_LR=(
+  [cifar10]=0.0000001 [cifar100]=0.00000001 [tinyimagenet]=0.00001
+)
+declare -A BASELINE_EPOCHS=(
+  [cifar10]=50 [cifar100]=100 [tinyimagenet]=100
+)
+declare -A SISA_EPOCHS=(
+  [cifar10]=5 [cifar100]=30 [tinyimagenet]=30
 )
 
 declare -A GPU_PID
@@ -88,6 +104,12 @@ submit_once() {
   GPU_PID[$g]=$!
 }
 
+submit_from_dir() {
+  local tag="$1" workdir="$2"
+  shift 2
+  submit_once "$tag" bash -c 'cd "$1"; shift; exec "$@"' bash "$workdir" "$@"
+}
+
 wait_all() {
   local failed=0
   for g in "${GPUS[@]}"; do
@@ -123,6 +145,7 @@ run_vilun() {
 
 run_vilun_f() {
   local tag="$1" ds="$2" om="$3" vm="$4" alpha="$5" beta="$6" heldout_ratio="$7" retain_ratio="${8:-$DEFAULT_RETAIN_RATIO}"
+  shift 8 || true
   submit_once "$tag" "$PYTHON_BIN" "${REPO_DIR}/vilun_f.py" \
     --dataset "$ds" --model "$om" --expert_model "$vm" \
     --data_dir "$DATA_DIR" --save_path "$SAVE_DIR" --history_dir "$HISTORY_DIR" \
@@ -135,7 +158,7 @@ run_vilun_f() {
     --original "${SAVE_DIR}/original_${ds}_${om}_seed${SEED}.pth" \
     --expert_path "${SAVE_DIR}/expert_${ds}_${vm}_seed${SEED}.pth" \
     --no_reuse_tuned_params --freeze_beta \
-    --save_tag "$tag"
+    --save_tag "$tag" "$@"
 }
 
 run_mia() {

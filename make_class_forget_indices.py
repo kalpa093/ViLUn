@@ -1,7 +1,5 @@
 import argparse
 import os
-import shutil
-
 import torch
 
 from pretrain_models import load_dataset
@@ -48,16 +46,9 @@ def main():
             f"forget_indices_sisa_{args.dataset}_{args.model}_seed{args.seed}.pt",
         ])
 
-    written = []
     for name in names:
         path = os.path.join(args.history_dir, name)
         save_indices(path, indices)
-        written.append(path)
-
-    if args.also_write_baseline_names and os.path.abspath(args.history_dir) != os.path.abspath("./history"):
-        os.makedirs("./history", exist_ok=True)
-        for path in written:
-            shutil.copy2(path, os.path.join("./history", os.path.basename(path)))
 
 
 if __name__ == "__main__":

@@ -37,9 +37,9 @@ def make_loader(dataset, indices, batch_size, shuffle):
 
 def save_summary(summary_path, row):
     header = [
-        "Method", "Dataset", "Orig_Model", "Seed", "Save_Tag", "Best_Epoch",
-        "Best_Train_Retain_Acc", "Best_Test_Retain_Acc", "Best_Forget_Acc",
-        "Best_Forget_PPL", "Best_Retain_PPL", "Time_Retrain(s)",
+        "Method", "Dataset", "Orig_Model", "Seed", "Save_Tag", "Final_Epoch",
+        "Final_Train_Retain_Acc", "Final_Test_Retain_Acc", "Final_Forget_Acc",
+        "Time_Retrain(s)",
         "Model_Path", "Forget_Indices_Path"
     ]
     write_header = not os.path.exists(summary_path) or os.path.getsize(summary_path) == 0
@@ -62,7 +62,6 @@ def main():
     parser.add_argument("--train_epochs", type=int, default=100)
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--lr", type=float, default=2e-5)
-    parser.add_argument("--patience", type=int, default=10)
     parser.add_argument("--llm_layers", type=int, default=8)
     parser.add_argument("--device", type=str, default="cuda:0")
     args = parser.parse_args()
@@ -83,8 +82,6 @@ def main():
     print(f"[Info] Retain subset size: {len(retain_indices)}")
 
     retain_loader_train = make_loader(train_llm, retain_indices, args.batch_size, True)
-    eval_forget_loader = make_loader(train_llm, forget_indices.tolist(), args.batch_size, False)
-    eval_retain_loader = make_loader(train_llm, retain_indices, args.batch_size, False)
 
     print(f"[Step 2] Initializing retrain oracle on {args.orig_model}...")
     model = LLMVisionClassifier(
@@ -97,10 +94,6 @@ def main():
 
     optimizer = optim.AdamW(model.parameters(), lr=args.lr)
 
-    best_score = None
-    best_epoch = 0
-    best_state = None
-    patience_counter = 0
     history_rows = []
 
     print("[Step 3] Retraining on retain subset only...")
@@ -121,16 +114,7 @@ def main():
             epoch_loss += loss.item() * labels.size(0)
             seen += labels.size(0)
 
-        res = evaluate_full(
-            model,
-            train_llm,
-            test_llm,
-            forget_indices,
-            args.device,
-            eval_forget_loader,
-            eval_retain_loader,
-            verbose=False,
-        )
+        res = evaluate_full(model, train_llm, test_llm, forget_indices, args.device, verbose=False)
 
         row = {
             "epoch": epoch,
@@ -140,38 +124,17 @@ def main():
             "train_retain_loss": res["Train_Retain"]["loss"],
             "test_retain_acc": res["Test_Retain "]["acc"],
             "test_retain_loss": res["Test_Retain "]["loss"],
-            "forget_ppl": res["forget_ppl"],
-            "retain_ppl": res["retain_ppl"],
         }
         history_rows.append(row)
-
-        score = row["test_retain_acc"]
-        improved = best_score is None or score > best_score
-        if improved:
-            best_score = score
-            best_epoch = epoch
-            best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
-            patience_counter = 0
-        else:
-            patience_counter += 1
 
         print(
             f"  Epoch [{epoch:>3}/{args.train_epochs}]"
             f" | Train_Retain: {row['train_retain_acc']:6.2f}%"
             f" | Test_Retain: {row['test_retain_acc']:6.2f}%"
             f" | Train_Forget: {row['train_forget_acc']:6.2f}%"
-            f" | Forget PPL: {row['forget_ppl']:.4f}"
-            f" | Retain PPL: {row['retain_ppl']:.4f}"
         )
 
-        if patience_counter >= args.patience:
-            print(f"  [Early Stop] No improvement for {args.patience} epochs.")
-            break
-
     total_time = time.time() - start
-
-    if best_state is not None:
-        model.load_state_dict(best_state)
 
     history_csv = os.path.join(args.history_dir, f"{args.save_tag}.csv")
     with open(history_csv, "w", newline="") as f:
@@ -182,15 +145,13 @@ def main():
     model_path = os.path.join(args.save_dir, f"{args.save_tag}.pth")
     torch.save(model.state_dict(), model_path)
 
-    best_row = history_rows[best_epoch - 1]
+    final_row = history_rows[-1]
     summary_path = os.path.join(args.history_dir, "summary_retrain_llm.csv")
     save_summary(summary_path, [
-        "Retrain-LLM", "cifar10", args.orig_model, args.seed, args.save_tag, best_epoch,
-        f"{best_row['train_retain_acc']:.2f}",
-        f"{best_row['test_retain_acc']:.2f}",
-        f"{best_row['train_forget_acc']:.2f}",
-        f"{best_row['forget_ppl']:.4f}",
-        f"{best_row['retain_ppl']:.4f}",
+        "Retrain-LLM", "cifar10", args.orig_model, args.seed, args.save_tag, final_row['epoch'],
+        f"{final_row['train_retain_acc']:.2f}",
+        f"{final_row['test_retain_acc']:.2f}",
+        f"{final_row['train_forget_acc']:.2f}",
         f"{total_time:.1f}",
         model_path,
         forget_indices_path,
@@ -199,7 +160,12 @@ def main():
     print(f"[Save] History -> {history_csv}")
     print(f"[Save] Model   -> {model_path}")
     print(f"[Save] Summary -> {summary_path}")
-    print(f"[Best] Epoch {best_epoch} | D_r={best_row['train_retain_acc']:.2f} | D_t={best_row['test_retain_acc']:.2f} | D_f={best_row['train_forget_acc']:.2f}")
+    print(
+        f"[Final] Epoch {final_row['epoch']}"
+        f" | D_r={final_row['train_retain_acc']:.2f}"
+        f" | D_t={final_row['test_retain_acc']:.2f}"
+        f" | D_f={final_row['train_forget_acc']:.2f}"
+    )
 
 
 if __name__ == '__main__':

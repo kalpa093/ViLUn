@@ -540,35 +540,8 @@ def evaluate_4_quadrant(model, train_set, test_set, forget_indices, device, verb
     return results
 
 
-@torch.no_grad()
-def evaluate_ppl(model, loader, device):
-    model.eval()
-    total_loss, total_n = 0.0, 0
-    for imgs, labels in loader:
-        imgs   = imgs.to(device)
-        labels = labels.to(device)
-        out    = model(imgs).float()
-        loss   = F.cross_entropy(out, labels, reduction='sum').item()
-        total_loss += loss
-        total_n    += labels.size(0)
-    avg_loss = total_loss / max(total_n, 1)
-    return float(np.exp(avg_loss))                  
-
-
-def evaluate_full(model, train_set, test_set, forget_indices, device,
-                  forget_loader, retain_loader, verbose=True):
-    res = evaluate_4_quadrant(model, train_set, test_set, forget_indices, device, verbose)
-
-    forget_ppl = evaluate_ppl(model, forget_loader, device)
-    retain_ppl = evaluate_ppl(model, retain_loader, device)
-
-    if verbose:
-        print(f"  {'Forget PPL (↑)':>15} | {forget_ppl:>8.4f}")
-        print(f"  {'Retain PPL (↓)':>15} | {retain_ppl:>8.4f}")
-
-    res['forget_ppl'] = forget_ppl
-    res['retain_ppl'] = retain_ppl
-    return res
+def evaluate_full(model, train_set, test_set, forget_indices, device, verbose=True):
+    return evaluate_4_quadrant(model, train_set, test_set, forget_indices, device, verbose)
 
                                             
                    
@@ -577,7 +550,6 @@ def run_unlearning(args, orig_model, expert_model,
                    forget_indices,
                    forget_loader, retain_loader,
                    train_set, test_set,
-                   eval_forget_loader, eval_retain_loader,
                    heldout_loader=None):
     is_heldout    = (args.mode == 'heldout')
     active_loader = heldout_loader if is_heldout else forget_loader
@@ -610,11 +582,8 @@ def run_unlearning(args, orig_model, expert_model,
     history = {
         'epoch': [], 'train_forget_acc': [], 'train_forget_loss': [],
         'train_retain_acc': [], 'train_retain_loss': [],
-        'test_retain_acc': [], 'test_retain_loss': [],
-        'forget_ppl': [], 'retain_ppl': []
+        'test_retain_acc': [], 'test_retain_loss': []
     }
-    best_epoch, best_retain_acc, best_forget_acc = 1, 0.0, 0.0
-    best_forget_ppl, best_retain_ppl             = 0.0, 0.0
 
     for epoch in range(args.unlearn_epochs):
         orig_model.train(); projector.eval()
@@ -668,8 +637,9 @@ def run_unlearning(args, orig_model, expert_model,
                 torch.nn.utils.clip_grad_norm_(orig_model.parameters(), max_norm=1.0)
             optimizer.step()
 
-        res = evaluate_full(orig_model, train_set, test_set, forget_indices,
-                            device_orig, eval_forget_loader, eval_retain_loader, verbose=False)
+        res = evaluate_full(
+            orig_model, train_set, test_set, forget_indices, device_orig, verbose=False
+        )
 
         retain_acc = res['Test_Retain ']['acc']
         train_retain_acc = res['Train_Retain']['acc']
@@ -679,8 +649,6 @@ def run_unlearning(args, orig_model, expert_model,
             f" | Forget Acc: {forget_acc:6.2f}%"
             f" | Retain Acc: {train_retain_acc:6.2f}%"
             f" | Test Acc: {retain_acc:6.2f}%"
-            f" | Forget PPL: {res['forget_ppl']:8.4f}"
-            f" | Retain PPL: {res['retain_ppl']:8.4f}"
         )
         history['epoch'].append(epoch + 1)
         history['train_forget_acc'].append(forget_acc)
@@ -689,24 +657,20 @@ def run_unlearning(args, orig_model, expert_model,
         history['train_retain_loss'].append(res['Train_Retain']['loss'])
         history['test_retain_acc'].append(retain_acc)
         history['test_retain_loss'].append(res['Test_Retain ']['loss'])
-        history['forget_ppl'].append(res['forget_ppl'])
-        history['retain_ppl'].append(res['retain_ppl'])
 
-    best_idx = int(np.argmax(history['test_retain_acc']))
-    best_epoch = history['epoch'][best_idx]
-    best_retain_acc = history['test_retain_acc'][best_idx]
-    best_forget_acc = history['train_forget_acc'][best_idx]
-    best_forget_ppl = history['forget_ppl'][best_idx]
-    best_retain_ppl = history['retain_ppl'][best_idx]
-
-    return history, best_epoch, best_retain_acc, best_forget_acc, best_forget_ppl, best_retain_ppl
+    final_idx = len(history['epoch']) - 1
+    return (
+        history,
+        history['epoch'][final_idx],
+        history['test_retain_acc'][final_idx],
+        history['train_forget_acc'][final_idx],
+    )
 
                                             
         
                                             
-def save_results(args, history, best_epoch,
-                 best_retain_acc, best_forget_acc,
-                 best_forget_ppl, best_retain_ppl,
+def save_results(args, history, final_epoch,
+                 final_retain_acc, final_forget_acc,
                  time_orig, time_expert, time_unlearn,
                  forget_indices_path):
     os.makedirs(args.save_path, exist_ok=True)
@@ -739,9 +703,8 @@ def save_results(args, history, best_epoch,
     summary_path = os.path.join(args.history_dir, 'summary_vilun_llm.csv')
     header = [
         'Method', 'Dataset', 'Orig_Model', 'Expert_Model', 'Seed', 'Save_Tag',
-        'Alpha', 'Beta', 'Best_Epoch',
-        'Best_Train_Retain_Acc', 'Best_Test_Retain_Acc', 'Best_Forget_Acc',
-        'Best_Forget_PPL', 'Best_Retain_PPL',
+        'Alpha', 'Beta', 'Final_Epoch',
+        'Final_Train_Retain_Acc', 'Final_Test_Retain_Acc', 'Final_Forget_Acc',
         'Time_Orig(s)', 'Time_Expert(s)', 'Time_Unlearn(s)',
         'Model_Path', 'Forget_Indices_Path'
     ]
@@ -753,9 +716,9 @@ def save_results(args, history, best_epoch,
         writer.writerow([
             method_name,
             'cifar10', args.orig_model, args.expert_model, args.seed, save_stem,
-            args.alpha, args.beta, best_epoch,
-            f"{history['train_retain_acc'][best_epoch-1]:.2f}", f"{best_retain_acc:.2f}", f"{best_forget_acc:.2f}",
-            f"{best_forget_ppl:.4f}", f"{best_retain_ppl:.4f}",
+            args.alpha, args.beta, final_epoch,
+            f"{history['train_retain_acc'][final_epoch-1]:.2f}",
+            f"{final_retain_acc:.2f}", f"{final_forget_acc:.2f}",
             f"{time_orig:.1f}", f"{time_expert:.1f}", f"{time_unlearn:.1f}",
             model_path, forget_indices_path
         ])
@@ -765,12 +728,10 @@ def save_results(args, history, best_epoch,
     print(f"  [Result] Mode           : {method_name}")
     print(f"  [Result] Orig Model     : {args.orig_model}")
     print(f"  [Result] Expert Model   : {args.expert_model}")
-    print(f"  [Result] Best Epoch     : {best_epoch}")
-    print(f"  [Result] Train Retain   : {history['train_retain_acc'][best_epoch-1]:.2f}%")
-    print(f"  [Result] Test Retain    : {best_retain_acc:.2f}%")
-    print(f"  [Result] Forget Acc     : {best_forget_acc:.2f}%  (↓ good)")
-    print(f"  [Result] Forget PPL     : {best_forget_ppl:.4f}")
-    print(f"  [Result] Retain PPL     : {best_retain_ppl:.4f}")
+    print(f"  [Result] Final Epoch    : {final_epoch}")
+    print(f"  [Result] Train Retain   : {history['train_retain_acc'][final_epoch-1]:.2f}%")
+    print(f"  [Result] Test Retain    : {final_retain_acc:.2f}%")
+    print(f"  [Result] Forget Acc     : {final_forget_acc:.2f}%")
     print(f"  [Time]   Unlearn        : {time_unlearn:.1f}s")
     print(f"{'='*55}")
 
@@ -797,8 +758,6 @@ def run_pipeline(args):
 
     forget_loader_llm = build_loader(train_llm, forget_idx.tolist(), batch_size=args.batch_size, shuffle=True)
     retain_loader_llm = build_loader(train_llm, retain_idx, batch_size=args.batch_size, shuffle=True)
-    eval_forget_llm = build_loader(train_llm, forget_idx.tolist(), batch_size=args.batch_size, shuffle=False)
-    eval_retain_llm = build_loader(train_llm, retain_idx, batch_size=args.batch_size, shuffle=False)
     forget_loader_small = build_loader(train_small, forget_idx.tolist(), batch_size=args.batch_size, shuffle=True)
 
     full_loader_llm = DataLoader(train_llm, batch_size=args.batch_size, shuffle=True)
@@ -840,8 +799,7 @@ def run_pipeline(args):
         print(f"  Saved: {ft_path}  [{time_orig:.1f}s]")
 
     print("\n[Baseline] Original model:")
-    evaluate_full(orig_model, train_llm, test_llm, forget_idx,
-                  device_orig, eval_forget_llm, eval_retain_llm)
+    evaluate_full(orig_model, train_llm, test_llm, forget_idx, device_orig)
 
     if args.unlearn_epochs == 0:
         print("  [Skip] unlearn_epochs=0: original LLM checkpoint prepared only.")
@@ -877,14 +835,11 @@ def run_pipeline(args):
                                               
     print(f"\n[Step 4] Unlearning [{args.mode}] ...")
     t2 = time.time()
-    (history, best_epoch,
-     best_retain_acc, best_forget_acc,
-     best_forget_ppl, best_retain_ppl) = run_unlearning(
+    history, final_epoch, final_retain_acc, final_forget_acc = run_unlearning(
         args, orig_model, expert_model,
         forget_idx,
         forget_loader_llm, retain_loader_llm,
         train_llm, test_llm,
-        eval_forget_llm, eval_retain_llm,
         heldout_loader
     )
     time_unlearn = time.time() - t2
@@ -897,9 +852,8 @@ def run_pipeline(args):
                   
     args._model_state = orig_model.state_dict()
 
-    save_results(args, history, best_epoch,
-                 best_retain_acc, best_forget_acc,
-                 best_forget_ppl, best_retain_ppl,
+    save_results(args, history, final_epoch,
+                 final_retain_acc, final_forget_acc,
                  time_orig, time_expert, time_unlearn,
                  forget_indices_path)
 

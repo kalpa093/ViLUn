@@ -1,8 +1,8 @@
 """
 SalUn: Saliency-Based Unlearning
 - Compatible with vilun.py experimental environment
-- Datasets : CIFAR10, CIFAR100, MNIST, Yale B
-- Models   : CNN, RNN, MLP, ResNet18, ViT
+- Datasets : CIFAR10, CIFAR100, TinyImageNet
+- Models   : CNN, RNN, MLP, ResNet18, ResNet18
 - Save     : salun_{dataset}_{model}_{seed}.pth
              history/salun_{dataset}_{model}_{seed}_epoch_log.csv
              history/salun_{dataset}_{model}_{seed}_best_summary.csv
@@ -694,11 +694,11 @@ def main():
     print(f"[Save] Epoch log saved to '{epoch_csv}'")
 
                                               
-    best_idx  = int(np.argmax(history['test_retain_acc']))
-    best_epoch      = history['epoch'][best_idx]
-    best_forget_acc = history['train_forget_acc'][best_idx]
-    best_train_retain_acc = history['train_retain_acc'][best_idx]
-    best_retain_acc = history['test_retain_acc'][best_idx]
+    final_idx = len(history['epoch']) - 1
+    final_epoch = history['epoch'][final_idx]
+    final_forget_acc = history['train_forget_acc'][final_idx]
+    final_train_retain_acc = history['train_retain_acc'][final_idx]
+    final_retain_acc = history['test_retain_acc'][final_idx]
 
     summary_csv = os.path.join("history", "summary_salun.csv")
     summary_exists = os.path.exists(summary_csv)
@@ -707,18 +707,18 @@ def main():
         if not summary_exists:
             writer.writerow([
                 'Dataset', 'Model', 'Seed', 'N_Forget', 'Unlearn_Mode',
-                'Best_Epoch', 'Best_Train_Retain_Acc', 'Best_Train_Forget_Acc', 'Best_Test_Retain_Acc',
+                'Final_Epoch', 'Final_Train_Retain_Acc', 'Final_Train_Forget_Acc', 'Final_Test_Retain_Acc',
                 'Total_Time_s'
             ])
         writer.writerow([
             args.dataset, args.model, args.seed, len(forget_indices), args.unlearn,
-            best_epoch,
-            f"{best_train_retain_acc:.4f}", f"{history['train_forget_acc'][best_idx]:.4f}", f"{best_retain_acc:.4f}",
+            final_epoch,
+            f"{final_train_retain_acc:.4f}", f"{final_forget_acc:.4f}", f"{final_retain_acc:.4f}",
             f"{elapsed:.2f}"
         ])
-    print(f"[Save] Best summary saved to '{summary_csv}'")
-    print(f"\n[Best Epoch {best_epoch}]  Forget Acc: {best_forget_acc:.2f}%  "
-          f"Train Retain: {best_train_retain_acc:.2f}%  Test Retain: {best_retain_acc:.2f}%  "
+    print(f"[Save] Final summary saved to '{summary_csv}'")
+    print(f"\n[Final Epoch {final_epoch}]  Forget Acc: {final_forget_acc:.2f}%  "
+          f"Train Retain: {final_train_retain_acc:.2f}%  Test Retain: {final_retain_acc:.2f}%  "
           f"Total Time: {elapsed:.2f}s")
 
 

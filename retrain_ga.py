@@ -494,11 +494,19 @@ def run_pipeline(args):
                                                                     
                                                                               
                                                                      
-    _fi_path = os.path.join(args.history_dir,
-                            f"forget_indices_{args.dataset}_{args.model}_seed{args.seed}.pt")
+    _fi_path = (
+        args.forget_indices_path
+        if args.forget_indices_path
+        else os.path.join(
+            args.history_dir,
+            f"forget_indices_{args.dataset}_{args.model}_seed{args.seed}.pt",
+        )
+    )
     if os.path.exists(_fi_path):
         forget_indices = torch.load(_fi_path, map_location='cpu')
         print(f"[Load] Forget indices ← {_fi_path} ({len(forget_indices)} samples)", flush=True)
+    elif args.forget_indices_path:
+        raise FileNotFoundError(f"Forget indices not found: {_fi_path}")
     else:
                                    
         random.seed(args.seed)                                  
@@ -568,7 +576,6 @@ def run_pipeline(args):
                               momentum=args.ga_momentum, weight_decay=args.ga_weight_decay)
         scheduler = None
     criterion = nn.CrossEntropyLoss()
-    early_stopper = EarlyStopping(patience=args.patience, mode='min')
     best_weights = None
     best_score = None
     
@@ -588,26 +595,38 @@ def run_pipeline(args):
         epoch_time = end_time - start_time
         cumulative_time += epoch_time
         
-        eval_res = evaluate_4_quadrant(final_model, train_set, test_set, forget_indices, device)
-        
-        t_f_acc  = eval_res.get('Train_Forget', {}).get('acc', float('nan'))
-        t_f_loss = eval_res.get('Train_Forget', {}).get('loss', float('nan'))
-        t_r_acc  = eval_res['Test_Retain ']['acc']
-        t_r_loss = eval_res['Test_Retain ']['loss']
         val_acc = float('nan')
         val_loss = float('nan')
-        if args.unlearning == 'retrain':
+        if args.unlearning == 'retrain' and args.final_eval_only:
             val_acc, val_loss = evaluate_loader(final_model, retain_val_loader, device)
             score = val_acc
             if best_score is None or score > best_score:
                 best_score = score
                 best_weights = copy.deepcopy(final_model.state_dict())
+            t_f_acc = float('nan')
+            t_f_loss = float('nan')
+            tr_r_acc = float('nan')
+            tr_r_loss = float('nan')
+            t_r_acc = float('nan')
+            t_r_loss = float('nan')
         else:
-            score = t_f_acc
-            early_stopper(score, final_model)
-        
-        tr_r_acc  = eval_res.get('Train_Retain', {}).get('acc', float('nan'))
-        tr_r_loss = eval_res.get('Train_Retain', {}).get('loss', float('nan'))
+            eval_res = evaluate_4_quadrant(
+                final_model, train_set, test_set, forget_indices, device
+            )
+            t_f_acc = eval_res.get('Train_Forget', {}).get('acc', float('nan'))
+            t_f_loss = eval_res.get('Train_Forget', {}).get('loss', float('nan'))
+            tr_r_acc = eval_res.get('Train_Retain', {}).get('acc', float('nan'))
+            tr_r_loss = eval_res.get('Train_Retain', {}).get('loss', float('nan'))
+            t_r_acc = eval_res['Test_Retain ']['acc']
+            t_r_loss = eval_res['Test_Retain ']['loss']
+            if args.unlearning == 'retrain':
+                val_acc, val_loss = evaluate_loader(final_model, retain_val_loader, device)
+                score = val_acc
+                if best_score is None or score > best_score:
+                    best_score = score
+                    best_weights = copy.deepcopy(final_model.state_dict())
+            else:
+                score = t_f_acc
         history_data.append({
             'epoch': epoch + 1,
             'train_forget_acc':  t_f_acc,
@@ -622,49 +641,79 @@ def run_pipeline(args):
             'time':              cumulative_time
         })
         
-        val_msg = f" | Val: {val_acc:6.2f}%" if args.unlearning == 'retrain' else ""
-        print(f"  Epoch [{epoch+1:>4}/{args.unlearn_epochs}] | Score: {score:6.2f}{val_msg} | Retain: {t_r_acc:6.2f}% | Forget: {t_f_acc:6.2f}% | Time: {cumulative_time:.1f}s")
+        if args.unlearning == 'retrain' and args.final_eval_only:
+            print(
+                f"  Epoch [{epoch+1:>4}/{args.unlearn_epochs}]"
+                f" | Retain Val: {val_acc:6.2f}%"
+                f" | Time: {cumulative_time:.1f}s"
+            )
+        else:
+            val_msg = f" | Val: {val_acc:6.2f}%" if args.unlearning == 'retrain' else ""
+            print(
+                f"  Epoch [{epoch+1:>4}/{args.unlearn_epochs}]"
+                f" | Score: {score:6.2f}{val_msg}"
+                f" | Retain: {t_r_acc:6.2f}%"
+                f" | Forget: {t_f_acc:6.2f}%"
+                f" | Time: {cumulative_time:.1f}s"
+            )
 
-        if args.unlearning != 'retrain' and early_stopper.early_stop:
-            print(f"  [Early Stop] Unlearning stopped at epoch {epoch+1}.")
-            break
+    save_stem = args.save_tag or f"{args.dataset}_{args.model}_seed{args.seed}"
+    if args.unlearning == 'retrain' and best_weights is not None:
+        final_model.load_state_dict(best_weights)
 
-    csv_filename = os.path.join(args.history_dir, f"{args.unlearning}_{args.dataset}_{args.model}_seed{args.seed}.csv")
+    if args.unlearning == 'retrain' and args.final_eval_only:
+        final_eval = evaluate_4_quadrant(
+            final_model, train_set, test_set, forget_indices, device
+        )
+        best_history_idx = max(
+            range(len(history_data)),
+            key=lambda index: history_data[index]['score'],
+        )
+        history_data[best_history_idx].update({
+            'train_forget_acc': final_eval['Train_Forget']['acc'],
+            'train_forget_loss': final_eval['Train_Forget']['loss'],
+            'train_retain_acc': final_eval['Train_Retain']['acc'],
+            'train_retain_loss': final_eval['Train_Retain']['loss'],
+            'test_retain_acc': final_eval['Test_Retain ']['acc'],
+            'test_retain_loss': final_eval['Test_Retain ']['loss'],
+        })
+        print(
+            "  [Oracle]"
+            f" D_r Acc: {final_eval['Train_Retain']['acc']:.2f}%"
+            f" | D_t Acc: {final_eval['Test_Retain ']['acc']:.2f}%"
+            f" | D_f Acc: {final_eval['Train_Forget']['acc']:.2f}%"
+        )
+
+    csv_filename = os.path.join(
+        args.history_dir,
+        f"{args.unlearning}_{save_stem}.csv",
+    )
     with open(csv_filename, mode='w', newline='') as file:
         writer = csv.DictWriter(file, fieldnames=history_data[0].keys())
         writer.writeheader()
         writer.writerows(history_data)
     print(f"[Save] History saved to '{csv_filename}'")
 
-                     
-    if args.unlearning == 'retrain' and best_weights is not None:
-        final_model.load_state_dict(best_weights)
-    elif args.unlearning != 'retrain' and early_stopper.best_weights is not None:
-        final_model.load_state_dict(early_stopper.best_weights)
-
            
     model_filename = os.path.join(
         args.save_path,
-        f"{args.unlearning}_{args.dataset}_{args.model}_seed{args.seed}.pth"
+        f"{args.unlearning}_{save_stem}.pth"
     )
     torch.save(final_model.state_dict(), model_filename)
     print(f"[Save] Unlearned model saved to '{model_filename}'")
 
                                                                  
-    forget_indices_path = os.path.join(
-        args.history_dir,
-        f"forget_indices_{args.dataset}_{args.model}_seed{args.seed}.pt"
-    )
+    forget_indices_path = _fi_path
     if not os.path.exists(forget_indices_path):
         torch.save(forget_indices, forget_indices_path)
         print(f"[Save] Forget indices saved to '{forget_indices_path}'")
     else:
         print(f"[Save] Forget indices already exist: '{forget_indices_path}'")
 
-    best_epoch_record = (
+    selected_epoch_record = (
         max(history_data, key=lambda x: x['score'])
         if args.unlearning == 'retrain'
-        else min(history_data, key=lambda x: x['score'])
+        else history_data[-1]
     )
     metadata_filename = os.path.join(args.history_dir, "summary_retrain_ga.csv")
     
@@ -672,19 +721,27 @@ def run_pipeline(args):
     with open(metadata_filename, mode='a', newline='') as f:
         writer = csv.writer(f)
         if not summary_exists:
-            writer.writerow(['unlearning', 'dataset', 'model', 'seed', 'best_epoch',
-                             'best_train_retain_acc', 'best_test_retain_acc', 'best_train_forget_acc',
-                             'selection_metric', 'time_unlearn(s)'])
+            writer.writerow(['unlearning', 'dataset', 'model', 'seed',
+                             'forget_ratio', 'n_forget', 'forget_indices_path', 'save_tag',
+                             'selected_epoch',
+                             'selected_train_retain_acc', 'selected_test_retain_acc', 'selected_train_forget_acc',
+                             'selection_metric', 'time_unlearn(s)', 'model_path', 'history_path'])
         writer.writerow([
             args.unlearning, args.dataset, args.model, args.seed,
-            best_epoch_record['epoch'],
-            round(best_epoch_record['train_retain_acc'] if best_epoch_record['train_retain_acc'] == best_epoch_record['train_retain_acc'] else 0.0, 4),
-            round(best_epoch_record['test_retain_acc'],  4),
-            round(best_epoch_record['train_forget_acc'] if best_epoch_record['train_forget_acc'] == best_epoch_record['train_forget_acc'] else 0.0, 4),
-            round(best_epoch_record['score'], 4),
-            round(best_epoch_record['time'], 4)
+            args.forget_ratio, len(forget_indices), forget_indices_path, save_stem,
+            selected_epoch_record['epoch'],
+            round(selected_epoch_record['train_retain_acc'] if selected_epoch_record['train_retain_acc'] == selected_epoch_record['train_retain_acc'] else 0.0, 4),
+            round(selected_epoch_record['test_retain_acc'],  4),
+            round(selected_epoch_record['train_forget_acc'] if selected_epoch_record['train_forget_acc'] == selected_epoch_record['train_forget_acc'] else 0.0, 4),
+            round(selected_epoch_record['score'], 4),
+            round(selected_epoch_record['time'], 4),
+            model_filename,
+            csv_filename,
         ])
-    print(f"[Save] Metadata updated at '{metadata_filename}' with Best Epoch: {best_epoch_record['epoch']} (Time to best: {best_epoch_record['time']:.2f}s)")
+    print(
+        f"[Save] Metadata updated at '{metadata_filename}' with selected epoch "
+        f"{selected_epoch_record['epoch']} (time: {selected_epoch_record['time']:.2f}s)"
+    )
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -710,6 +767,14 @@ if __name__ == "__main__":
     parser.add_argument("--original", type=str, default=None, help="Path to original model for gradient ascent")
     parser.add_argument("--save_path", type=str, default="./saved_models")
     parser.add_argument("--history_dir", type=str, default="./history")
+    parser.add_argument("--forget_indices_path", type=str, default=None,
+                        help="Exact forget-index .pt file for a case-specific run.")
+    parser.add_argument("--forget_ratio", type=float, default=None,
+                        help="Forget ratio recorded in the summary.")
+    parser.add_argument("--save_tag", type=str, default=None,
+                        help="Case-specific suffix for checkpoint and history filenames.")
+    parser.add_argument("--final_eval_only", action="store_true",
+                        help="For Retrain, select by validation and run full evaluation once.")
     
     args = parser.parse_args()
     run_pipeline(args)

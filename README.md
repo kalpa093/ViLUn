@@ -1,251 +1,193 @@
-# ViLUn (Villain-Guided Learning for Unlearning)
+# ViLUn: Villain-Guided Learning for Unlearning
 
-This repository contains the experimental artifact for **ViLUn: Villain-Guided Learning for Forget-Free Unlearning**. ViLUn studies requester-owner machine unlearning where the requester keeps the forget data local, trains a compact headless villain backbone, and the model owner performs feature-space orthogonal repulsion without receiving raw forget samples.
+This repository is the experimental artifact for ViLUn. It contains the code
+used for the image-domain main results, privacy evaluation, architecture and
+configuration studies, the Qwen2.5-based extension, small forget-set analysis,
+and the requester-side training ablation.
+
+ViLUn keeps the forget set with the requester. The requester trains a compact
+villain model and transfers only its headless backbone; the model owner then
+uses feature-space orthogonal repulsion without receiving raw forget samples.
 
 ## Environment
 
-We tested the artifact under the following environment:
-
-| Component | Version |
-| --- | --- |
-| OS | Ubuntu 22.04.5 LTS (jammy) |
-| Kernel | Linux 6.8.0-107-generic |
-| Python | 3.9.7 |
-| pip | 21.2.4 |
-| GPU | 3 x NVIDIA GeForce RTX 4090, 24 GB each |
-| NVIDIA Driver | 535.230.02 |
-| System CUDA | 12.2 |
-| PyTorch | 2.7.0 |
-| PyTorch CUDA | 12.6 |
-| cuDNN | 90501 |
-
-A minimal setup is:
+The experiments were developed on Ubuntu 22.04 with Python 3.9.7 and three
+NVIDIA RTX 4090 GPUs. The tested package versions are pinned in
+`requirements.txt`.
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install --upgrade pip
-pip install -r requirements.txt
+python3 -m pip install --upgrade pip
+python3 -m pip install -r requirements.txt
 ```
 
-For GPU runs, install the PyTorch build that matches your CUDA/driver setup from the official PyTorch instructions before installing the remaining packages. On the tested server, `nvidia-smi` reported CUDA 12.2, while PyTorch was built with CUDA 12.6 and `torch.cuda.is_available()` returned `True`.
-
-The artifact intentionally keeps `requirements.txt` minimal. The code directly uses PyTorch/TorchVision, NumPy, Pillow, Optuna, and HuggingFace Transformers. `accelerate` is included because the LLM extension loads HuggingFace models with `device_map`.
-
-```text
-torch==2.7.0
-torchvision==0.22.0
-numpy==1.26.4
-Pillow==8.4.0
-transformers==4.49.0
-accelerate==1.9.0
-```
-
-The LLM extension uses HuggingFace `transformers` and may require model access, enough GPU memory, and a configured HuggingFace cache/token depending on the selected model.
+Install a PyTorch build compatible with the local CUDA driver when the pinned
+wheel is unavailable for the target platform. The Qwen2.5 experiment also
+requires access to the selected HuggingFace checkpoint and sufficient GPU
+memory.
 
 ## Data
 
-By default scripts use:
-
-```bash
-DATA_DIR=./data
-ROOT_DIR=./vilun_runs
-```
-
-`torchvision` datasets such as CIFAR-10 and CIFAR-100 are downloaded automatically. TinyImageNet should be placed under `DATA_DIR` in the standard TinyImageNet layout expected by the loaders.
-
-All outputs are written under `ROOT_DIR`:
+Scripts use `./data` by default. CIFAR-10 and CIFAR-100 are downloaded by
+TorchVision. TinyImageNet must use the following standard layout:
 
 ```text
-vilun_runs/
-  saved_models/
-  history/
-  logs/
-  .done/
+data/tiny-imagenet-200/
+  train/
+  val/
+  wnids.txt
 ```
 
-The `.done` directory lets scripts skip completed jobs when rerun.
+Generated checkpoints, indices, histories, and logs are written below
+`./vilun_runs` and are excluded from Git.
 
-## Configuration
+## Main Evaluation
 
-All shell scripts share `scripts/common.sh`. You can override defaults with environment variables:
+The main image-domain setting uses ResNet18 for CIFAR-10, ResNet50 for
+CIFAR-100 and TinyImageNet, and an RNN villain. All reported unlearning
+checkpoints use the final fixed epoch rather than selecting an epoch with the
+Retrain oracle.
+
+Run the stages in order:
 
 ```bash
-GPUS="0 1 2" SEED=42 ROOT_DIR=./vilun_runs DATA_DIR=./data ./scripts/run_02_main_sample.sh
+bash scripts/run_00_prepare.sh
+bash scripts/run_01_baselines.sh
+bash scripts/run_02_main_sample.sh
+bash scripts/run_05_privacy_mia.sh
 ```
 
-Common variables:
+The stages respectively prepare original, villain, and Retrain models; run GA,
+SISA, SalUn, PS, and DELETE; run ViLUn and ViLUn_f; and evaluate output- and
+representation-based membership leakage for the unlearned and villain models.
 
-| Variable | Default | Meaning |
-| --- | --- | --- |
-| `GPUS` | `0 1 2` | GPU IDs used by the launcher |
-| `DATASETS` | `cifar10 cifar100 tinyimagenet` | Main image datasets |
-| `TRAIN_EPOCHS` | `200` | Original/retrain training epochs |
-| `UNLEARN_EPOCHS` | `50` | ViLUn owner-side update epochs |
-| `DEFAULT_ALPHA` | `1` | Retain KL weight |
-| `DEFAULT_BETA` | `2` | Feature repulsion weight |
-| `DEFAULT_HELDOUT_RATIO` | `0.05` | Held-out auxiliary ratio |
-| `DEFAULT_RETAIN_RATIO` | `0.05` | Retain subset ratio |
-| `LLM_ORIG_MODEL` | `Qwen/Qwen2.5-3B` | LLM classifier backbone for the extension |
-
-## Running Experiments
-
-Run everything:
+Default settings can be overridden through environment variables:
 
 ```bash
-chmod +x run_vilun.sh scripts/*.sh
-./run_vilun.sh
+SEED=42 GPUS="0 1 2" DATA_DIR=./data ROOT_DIR=./vilun_runs \
+  bash scripts/run_02_main_sample.sh
 ```
 
-For most users, running stage by stage is easier to monitor.
+Important defaults are `alpha=1`, `beta=2`, feature margin `-0.2`, held-out
+ratio `0.05`, retain-subset ratio `0.05`, unlearning learning rate `1e-4`, and
+50 owner-side update epochs. Baseline learning rates and training budgets are
+defined explicitly in `scripts/common.sh` and match the paper appendix.
 
-### 0. Prepare Original Models, Villains, and Retrain References
+## Multi-Seed Statistics
+
+The statistical evaluation repeats the complete main pipeline with paired
+seeds. Every seed has an isolated output directory and completed stages are
+resumable.
 
 ```bash
-./scripts/run_00_prepare.sh
+SEEDS="42 43 44 45 46" GPUS="0 1 2" bash run_multiseed_main.sh
 ```
 
-This stage trains or loads original models, prepares forget indices, trains compact headless villain backbones, and runs retrain references used as the oracle.
-
-### 1. Baselines
+To run only new seeds and analyze later:
 
 ```bash
-./scripts/run_01_baselines.sh
+SEEDS="43 44 45 46" GPUS="0 1 2" RUN_ANALYSIS=0 \
+  bash run_multiseed_main.sh
+
+python3 analyze_multiseed_main.py \
+  --root ./vilun_runs/multiseed \
+  --seeds 42 43 44 45 46
 ```
 
-Runs Gradient Ascent, SISA, SalUn, Prototype Surgery, and DELETE on the main sample-level setting.
+The analyzer reports sample mean, standard deviation, variance, and 95% CI for
+accuracy and privacy metrics. It computes seed-matched Total MAE to Retrain,
+uses dataset-seed pairs as blocks in a Friedman test, and applies two-sided
+paired Wilcoxon tests against ViLUn with Holm correction and paired
+rank-biserial effect sizes.
 
-### 2. Main Sample-Level ViLUn Results
-
-```bash
-./scripts/run_02_main_sample.sh
-```
-
-Runs privacy-preserving `ViLUn` and direct-forget `ViLUn_f` on CIFAR-10, CIFAR-100, and TinyImageNet with the default dataset/model pairs:
+Outputs are written to `vilun_runs/multiseed/analysis/`:
 
 ```text
-CIFAR-10     -> ResNet18
-CIFAR-100    -> ResNet50
-TinyImageNet -> ResNet50
+main_accuracy_mean_std.csv
+main_privacy_mean_std.csv
+main_overall_total_mae_mean_std.csv
+friedman_total_mae.csv
+wilcoxon_holm_total_mae.csv
 ```
 
-### 3. Configuration Sensitivity
+## Additional Experiments
+
+### Configuration sensitivity
+
+Runs the alpha-beta grid, held-out ratio study, and retain-subset study for the
+settings reported in the appendix.
 
 ```bash
-./scripts/run_03_config_sensitivity.sh
+bash scripts/run_03_config_sensitivity.sh
 ```
 
-Runs the alpha-beta sensitivity grid, held-out data ratio study, and retain subset scalability study.
+### Architecture robustness
 
-Defaults:
+Runs the CIFAR-10 `5 x 5` original/villain architecture grid for ViLUn.
 
 ```bash
-ALPHA_VALUES="0.5 1 2 4"
-BETA_VALUES="0.5 1 2 4"
-HELDOUT_RATIOS="0.05 0.1 0.2 0.5"
-RETAIN_RATIOS="0.05 0.1 0.5"
+bash scripts/run_04_architecture.sh
 ```
 
-### 4. Architecture Robustness
+### Requester-side training ablation and class-level scope
 
 ```bash
-./scripts/run_04_architecture.sh
+bash scripts/run_06_ablation_scope.sh
 ```
 
-Runs the original/villain architecture grid for the image classifiers.
-
-### 5. Privacy and MIA
+The two components can be selected independently:
 
 ```bash
-./scripts/run_05_privacy_mia.sh
+RUN_CLASS_LEVEL=0 bash scripts/run_06_ablation_scope.sh
+RUN_RANDOM_VILLAIN=0 bash scripts/run_06_ablation_scope.sh
 ```
 
-Runs membership-inference evaluation for the unlearned models and the transferred villain artifact. The villain artifact experiment compares the full villain model and the headless villain backbone.
+### Qwen2.5-based classifier
 
-### 6. Ablation and Scope Analysis
+Prepares one shared Qwen2.5 original checkpoint and runs Retrain, ViLUn, and
+ViLUn_f with CNN, MLP, RNN, ResNet18, and ResNet50 villains.
 
 ```bash
-./scripts/run_06_ablation_scope.sh
+bash scripts/run_07_llm.sh
 ```
 
-Runs the random villain ablation and the class-level scope experiment.
+The default model is `Qwen/Qwen2.5-3B` with eight transformer layers, matching
+the paper implementation.
 
-To run only the random villain ablation:
+### Small forget sets
+
+Runs ViLUn and ViLUn_f at forget ratios of 1%, 0.5%, 0.1%, 0.05%, and 0.01%,
+followed by ratio-matched Retrain references.
 
 ```bash
-RUN_CLASS_LEVEL=0 ./scripts/run_06_ablation_scope.sh
+bash run_small_forget.sh
+bash run_small_forget_retrain.sh
 ```
 
-To run only class-level scope:
+This experiment uses `alpha=1` and `beta=8` by default.
 
-```bash
-RUN_RANDOM_VILLAIN=0 ./scripts/run_06_ablation_scope.sh
-```
-
-Class-level scope uses class `0` by default. Override it with:
-
-```bash
-CLASS_TARGET_ID=3 ./scripts/run_06_ablation_scope.sh
-```
-
-### 7. LLM Extension and MIA
-
-```bash
-./scripts/run_07_llm_mia.sh
-```
-
-Runs the LLM-based classifier extension and then evaluates membership
-inference attacks on the saved LLM unlearned models. By default, this
-uses `Qwen/Qwen2.5-3B` with compact villain architectures listed in
-`LLM_EXPERTS`.
-
-To run only the LLM MIA step after models have already been generated:
-
-```bash
-RUN_LLM_UNLEARN=0 RUN_LLM_MIA=1 ./scripts/run_07_llm_mia.sh
-```
-
-To change the LLM backbone:
-
-```bash
-LLM_ORIG_MODEL="Qwen/Qwen2.5-7B" ./scripts/run_07_llm_mia.sh
-```
-
-
-## Output Files
-
-Important CSV summaries are written to:
+## Repository Structure
 
 ```text
-${ROOT_DIR}/history/summary_retrain_ga.csv
-${ROOT_DIR}/history/summary_heldout.csv
-${ROOT_DIR}/history/summary_vilun.csv
-${ROOT_DIR}/history/summary_mia.csv
-${ROOT_DIR}/history/summary_vilun_llm.csv
-${ROOT_DIR}/history/summary_mia_llm.csv
+vilun.py, vilun_f.py       ViLUn and direct-forget ViLUn_f
+pretrain_models.py         original and villain preparation
+retrain_ga.py              Retrain and Gradient Ascent
+sisa_train.py              SISA
+salun.py                    SalUn
+ps.py                       Prototype Surgery
+delete.py                   DELETE
+evaluate_mia.py             output-, representation-, and gradient-based MIA
+vilun_llm.py                Qwen2.5-based image-classification extension
+scripts/                    paper experiment launchers
 ```
 
-Per-epoch traces and logs are saved under:
-
-```text
-${ROOT_DIR}/history/
-${ROOT_DIR}/logs/
-```
-
-## Notes
-
-`ViLUn` uses:
+ViLUn optimizes
 
 ```text
 alpha * L_retain + beta * L_hrep
 ```
 
-where `L_retain` is KL consistency against the frozen original model on a small retain subset and `L_hrep` is held-out feature-space orthogonal repulsion against the headless villain backbone.
-
-`ViLUn_f` uses the same retain KL loss but applies feature repulsion directly on the forget samples:
-
-```text
-alpha * L_retain + beta * L_frep
-```
-
-The model owner receives headless villain backbone parameters rather than raw forget data or a full classification head.
+where `L_retain` is KL consistency with the frozen original model and `L_hrep`
+is held-out feature-space repulsion from the headless villain. ViLUn_f uses the
+same retain term but computes the repulsion term directly on forget samples.
